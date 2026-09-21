@@ -41,8 +41,9 @@ backend/
   test_price_feed.py        # Phase 1 smoke tests (7 scenarios)
   test_wallet.py            # Phase 2a smoke tests (9 scenarios)
   test_order_engine.py      # Phase 2b smoke tests (10 scenarios)
+  test_sse_stream.py        # Step 3 SSE streaming tests (3 scenarios)
 
-frontend/                   # Phase 3+ — not yet built
+frontend/                   # Frontend phases — planned
   src/
     components/
     api/
@@ -53,12 +54,13 @@ frontend/                   # Phase 3+ — not yet built
 ## Build Phases
 | Phase | Scope | Status |
 |---|---|---|
-| **1** | Price feed · yfinance · SSE · market hours | ✅ Done |
+| **1** | Price feed · yfinance · market hours | ✅ Done |
 | **2a** | SQLite models · dual wallets (INR + USD) · setup endpoints | ✅ Done |
 | **2b** | Order engine · portfolio P&L · order history | ✅ Done |
-| **3** | React frontend · Watchlist · Balance setup screen | ⬜ Planned |
-| **4** | Trading UI · Order form · Portfolio view · Transaction log | ⬜ Planned |
-| **5** | Limit/stop-loss orders · Charts · Indicators · Backtesting | ⬜ Planned |
+| **3** | Real-time SSE price streaming (`/api/prices/stream?tickers=...`) | ✅ Done |
+| **4** | React frontend · Watchlist · Balance setup screen | ⬜ Planned |
+| **5** | Trading UI · Order form · Portfolio view · Transaction log | ⬜ Planned |
+| **6** | Limit/stop-loss orders · Charts · Indicators · Backtesting | ⬜ Planned |
 
 ---
 
@@ -75,6 +77,7 @@ pip install -r requirements.txt
 python test_price_feed.py
 python test_wallet.py
 python test_order_engine.py
+python test_sse_stream.py
 
 # Start the API server
 uvicorn main:app --reload
@@ -89,8 +92,8 @@ Swagger UI → **http://localhost:8000/docs**
 ### Prices
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/prices?symbols=RELIANCE.NS,AAPL` | Batch quote fetch (cached 30 s) |
-| `GET` | `/api/prices/stream?symbols=RELIANCE.NS,AAPL` | SSE live price stream |
+| `GET` | `/api/prices?symbols=RELIANCE.NS,AAPL` | Batch quote fetch (cached) |
+| `GET` | `/api/prices/stream?tickers=AAPL,TSLA,RELIANCE.NS` | SSE live price stream (pushes every 5s per ticker, graceful disconnect) |
 | `GET` | `/api/prices/market-status?exchange=NSE` | Is the exchange open right now? |
 | `GET` | `/api/prices/validate?symbol=INFY.NS` | Check if a ticker is valid |
 

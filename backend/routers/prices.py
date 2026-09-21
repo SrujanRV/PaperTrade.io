@@ -23,7 +23,7 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from config import SSE_PUSH_INTERVAL_SECONDS, SSE_PING_INTERVAL_SECONDS
@@ -57,48 +57,101 @@ async def fetch_prices(
 
 # ── /api/prices/stream ────────────────────────────────────────────────────────
 
-async def _sse_event(data: dict) -> str:
-    return f"data: {json.dumps(data)}\n\n"
+async def _price_event_generator(
+    request: Request,
+    symbols: list[str],
+    limit: int | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Async generator that pushes SSE events with fresh price data for each ticker.
+    Gracefully stops fetching as soon as client disconnects or limit is reached.
+    """
+    disconnected = False
 
-
-async def _price_event_generator(symbols: list[str]) -> AsyncGenerator[str, None]:
-    """Async generator that pushes SSE events with fresh price data."""
-    tick = 0
-    while True:
+    async def watch_disconnect():
+        nonlocal disconnected
         try:
+            while True:
+                msg = await request.receive()
+                if msg.get("type") == "http.disconnect":
+                    disconnected = True
+                    break
+        except Exception:
+            disconnected = True
+
+    watcher = asyncio.create_task(watch_disconnect())
+    logger.info("SSE client connected for tickers: %s", symbols)
+
+    try:
+        ticks = 0
+        while not disconnected:
             quotes = get_quotes(symbols)
-            payload = [q.to_dict() for q in quotes]
-            yield await _sse_event({"type": "quotes", "data": payload})
-        except Exception as exc:
-            logger.error("SSE fetch error: %s", exc)
-            yield await _sse_event({"type": "error", "message": str(exc)})
+            for q in quotes:
+                payload = {
+                    "ticker": q.symbol,
+                    "current_price": q.price,
+                    "change_percent": q.change_pct,
+                    "timestamp": q.timestamp,
+                    "market_status": "open" if q.market_open else "closed",
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
 
-        # Send keepalive pings between price pushes
-        for _ in range(SSE_PUSH_INTERVAL_SECONDS // SSE_PING_INTERVAL_SECONDS):
-            await asyncio.sleep(SSE_PING_INTERVAL_SECONDS)
-            yield ": ping\n\n"
+            ticks += 1
+            if limit is not None and ticks >= limit:
+                logger.info("SSE limit reached (%d ticks) for tickers: %s", limit, symbols)
+                break
 
-        tick += 1
+            # Sleep in 0.5s increments while monitoring disconnect state
+            sleep_chunk = 0.5
+            elapsed = 0.0
+            while elapsed < SSE_PUSH_INTERVAL_SECONDS:
+                if disconnected:
+                    logger.info("SSE client disconnected during sleep: %s", symbols)
+                    return
+                await asyncio.sleep(sleep_chunk)
+                elapsed += sleep_chunk
+
+    except (asyncio.CancelledError, GeneratorExit):
+        logger.info("SSE stream cancelled for tickers: %s", symbols)
+        raise
+    except Exception as exc:
+        logger.error("SSE stream error for %s: %s", symbols, exc)
+    finally:
+        watcher.cancel()
+        logger.info("SSE stream cleaned up for tickers: %s", symbols)
 
 
 @router.get("/stream")
 async def stream_prices(
-    symbols: str = Query(..., description="Comma-separated ticker symbols"),
+    request: Request,
+    tickers: str | None = Query(None, description="Comma-separated ticker symbols, e.g. AAPL,TSLA,RELIANCE.NS"),
+    symbols: str | None = Query(None, description="Alternative alias for tickers"),
+    limit: int | None = Query(None, description="Optional maximum updates to stream before closing (useful for tests)"),
 ):
     """
-    SSE endpoint — connect once, receive periodic price pushes.
+    SSE endpoint — stream live price updates for requested tickers.
 
-    Example: GET /api/prices/stream?symbols=RELIANCE.NS,AAPL
+    Example: GET /api/prices/stream?tickers=AAPL,TSLA,RELIANCE.NS
     """
-    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
-    if not symbol_list:
-        raise HTTPException(status_code=400, detail="No symbols provided")
+    raw_tickers = tickers or symbols
+    if not raw_tickers:
+        raise HTTPException(
+            status_code=400,
+            detail="No tickers provided. Usage: /api/prices/stream?tickers=AAPL,TSLA,RELIANCE.NS",
+        )
+
+    ticker_list = [s.strip().upper() for s in raw_tickers.split(",") if s.strip()]
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="No valid tickers provided")
+    if len(ticker_list) > 50:
+        raise HTTPException(status_code=400, detail="Max 50 tickers per request")
 
     return StreamingResponse(
-        _price_event_generator(symbol_list),
+        _price_event_generator(request, ticker_list, limit=limit),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",   # disable nginx buffering if behind proxy
         },
     )

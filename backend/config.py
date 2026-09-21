@@ -6,7 +6,7 @@ All tunable constants live here so nothing is hard-coded elsewhere.
 from zoneinfo import ZoneInfo
 
 # ── Price-feed polling ──────────────────────────────────────────────────────
-PRICE_CACHE_TTL_SECONDS: int = 30        # How long a cached quote stays fresh
+PRICE_CACHE_TTL_SECONDS: int = 10        # Cache TTL to respect yfinance rate limits
 YFINANCE_BATCH_SIZE: int = 10            # Max tickers per yfinance download call
 YFINANCE_HISTORY_PERIOD: str = "2d"      # Period used when fetching OHLCV history
 YFINANCE_HISTORY_INTERVAL: str = "1m"    # Interval for that history pull
@@ -49,8 +49,8 @@ SUFFIX_TO_EXCHANGE: dict[str, str] = {
 US_DEFAULT_EXCHANGE = "NASDAQ"
 
 # ── SSE ────────────────────────────────────────────────────────────────────
-SSE_PING_INTERVAL_SECONDS: int = 15     # How often to push a keepalive ping
-SSE_PUSH_INTERVAL_SECONDS: int = 30     # How often to push fresh quotes
+SSE_PING_INTERVAL_SECONDS: int = 15     # Keepalive ping interval
+SSE_PUSH_INTERVAL_SECONDS: int = 5      # Push interval (5-10s as per spec)
 
 # ── CORS (development) ─────────────────────────────────────────────────────
 CORS_ORIGINS: list[str] = [
