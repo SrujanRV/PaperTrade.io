@@ -55,6 +55,7 @@ frontend/
       Watchlist.jsx         # 38px dense terminal table, right-aligned tabular numerics, 400ms tick-flash
       OrderTicket.jsx       # Side-panel order ticket, live total, market-hours lock, fill & reject states
       Portfolio.jsx         # Live holdings table, unrealized P&L, realized P&L, wallet summary
+      OrderHistory.jsx      # Historical execution audit log with in-row rejection reasons
       WalletSetupModal.jsx  # First-run modal for setting starting INR & USD balances
     hooks/
       usePriceStream.js     # SSE EventSource wrapper with tick-direction detection
@@ -75,8 +76,9 @@ frontend/
 | **4a** | React Terminal UI · Watchlist Component · SSE Hook | ✅ Done |
 | **4b** | Wallet Setup Modal · Order Ticket Panel · Persistent Balances | ✅ Done |
 | **4c** | Portfolio/Holdings View · Live P&L · Wallet Summaries | ✅ Done |
-| **5** | Order History & Transaction Audit Log | ⬜ Planned |
-| **6** | Limit/stop-loss orders · Charts · Indicators · Backtesting | ⬜ Planned |
+| **4d** | Order History View · Execution Audit Log · Rejection Diagnostics | ✅ Done |
+| **5** | Limit/stop-loss orders · Advanced Order Types | ⬜ Planned |
+| **6** | Charts · Technical Indicators · Backtesting Engine | ⬜ Planned |
 
 ---
 

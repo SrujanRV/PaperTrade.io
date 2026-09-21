@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Watchlist } from './components/Watchlist';
 import { Portfolio } from './components/Portfolio';
+import { OrderHistory } from './components/OrderHistory';
 import { OrderTicket } from './components/OrderTicket';
 import { WalletSetupModal } from './components/WalletSetupModal';
 import { fetchWallet } from './api/client';
@@ -112,6 +113,16 @@ export default function App() {
             >
               Portfolio & Positions
             </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === 'history'
+                  ? 'bg-[#232731] text-text-primary'
+                  : 'text-text-muted hover:text-text-primary'
+              }`}
+            >
+              Order History
+            </button>
           </div>
 
           <div className="text-[11px] font-mono-tabular text-text-muted">
@@ -119,7 +130,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* View Content: Watchlist or Portfolio + Dockable Order Ticket */}
+        {/* View Content: Watchlist, Portfolio, or Order History + Dockable Order Ticket */}
         <div className="flex flex-col lg:flex-row gap-6 items-start">
           {/* Main Table Area */}
           <div className="flex-1 w-full">
@@ -137,6 +148,15 @@ export default function App() {
                 onSelectTicker={(ticker) => setSelectedTicker(ticker)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
                 livePrices={prices}
+                refreshKey={refreshKey}
+              />
+            )}
+
+            {activeTab === 'history' && (
+              <OrderHistory
+                selectedMarket={portfolioMarket}
+                onSelectMarket={(m) => setPortfolioMarket(m)}
+                onGoToWatchlist={() => setActiveTab('watchlist')}
                 refreshKey={refreshKey}
               />
             )}

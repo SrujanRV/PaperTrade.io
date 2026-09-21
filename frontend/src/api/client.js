@@ -20,6 +20,15 @@ export async function fetchWalletSummary(market) {
   return await res.json();
 }
 
+export async function fetchOrders(market) {
+  const res = await fetch(`/api/orders/${market}`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`Failed to fetch orders for ${market}: ${res.statusText}`);
+  }
+  return await res.json();
+}
+
 export async function setupWallet(market, startingBalance) {
   const res = await fetch('/api/wallet/setup', {
     method: 'POST',
