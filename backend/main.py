@@ -63,8 +63,23 @@ app.include_router(prices_router)
 app.include_router(wallet_router)
 app.include_router(orders_router)
 
-# Phase 3+ routers will be added here:
-# app.include_router(portfolio_router)  # standalone portfolio endpoints if needed
+from routers.orders import place_order
+from models.schemas import OrderOut
+app.add_api_route(
+    "/api/order",
+    place_order,
+    methods=["POST"],
+    response_model=OrderOut,
+    status_code=201,
+    tags=["orders"],
+    summary="Place order (alias for /api/orders)",
+)
+
+from fastapi.responses import RedirectResponse
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/api/health")

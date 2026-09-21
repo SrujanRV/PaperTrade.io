@@ -49,7 +49,7 @@ function formatChangePct(value) {
   return `${sign}${num.toFixed(2)}%`;
 }
 
-export function Watchlist() {
+export function Watchlist({ selectedTicker, onSelectTicker }) {
   const { prices, status } = usePriceStream(DEFAULT_TICKERS);
 
   return (
@@ -131,10 +131,17 @@ export function Watchlist() {
                   ? 'animate-tick-down'
                   : '';
 
+              const isSelected = selectedTicker?.toUpperCase() === meta.symbol;
+
               return (
                 <tr
                   key={meta.symbol}
-                  className="h-[38px] border-b border-border hover:bg-surface-hover transition-colors duration-150 group"
+                  onClick={() => onSelectTicker && onSelectTicker(meta.symbol, quote)}
+                  className={`h-[38px] border-b border-border transition-colors duration-150 group cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#1c2027] border-l-2 border-l-accent'
+                      : 'hover:bg-surface-hover'
+                  }`}
                 >
                   {/* Symbol Column */}
                   <td className="px-3 py-0 align-middle">

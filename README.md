@@ -48,11 +48,16 @@ frontend/
   vite.config.js
   tailwind.config.js
   src/
+    api/
+      client.js             # API helpers for wallets and orders
     components/
+      Header.jsx            # Persistent header with dual-wallet cash badges & UTC clock
       Watchlist.jsx         # 38px dense terminal table, right-aligned tabular numerics, 400ms tick-flash
+      OrderTicket.jsx       # Side-panel order ticket, live total, market-hours lock, fill & reject states
+      WalletSetupModal.jsx  # First-run modal for setting starting INR & USD balances
     hooks/
       usePriceStream.js     # SSE EventSource wrapper with tick-direction detection
-    App.jsx                 # Terminal layout & clock
+    App.jsx                 # Terminal layout, state management, and wallet refresh
     index.css               # Token variables, tabular-nums utility, tick-flash keyframes
     main.jsx
 ```
@@ -66,8 +71,9 @@ frontend/
 | **2a** | SQLite models · dual wallets (INR + USD) · setup endpoints | ✅ Done |
 | **2b** | Order engine · portfolio P&L · order history | ✅ Done |
 | **3** | Real-time SSE price streaming (`/api/prices/stream?tickers=...`) | ✅ Done |
-| **4** | React Terminal UI · Watchlist Component · SSE Hook | ✅ Done |
-| **5** | Trading UI · Order form · Portfolio view · Transaction log | ⬜ Planned |
+| **4a** | React Terminal UI · Watchlist Component · SSE Hook | ✅ Done |
+| **4b** | Wallet Setup Modal · Order Ticket Panel · Persistent Balances | ✅ Done |
+| **5** | Portfolio Holdings View · Realized/Unrealized P&L · Transaction Log | ⬜ Planned |
 | **6** | Limit/stop-loss orders · Charts · Indicators · Backtesting | ⬜ Planned |
 
 ---

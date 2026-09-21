@@ -1,56 +1,115 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Header } from './components/Header';
 import { Watchlist } from './components/Watchlist';
-import { Activity } from 'lucide-react';
+import { OrderTicket } from './components/OrderTicket';
+import { WalletSetupModal } from './components/WalletSetupModal';
+import { fetchWallet } from './api/client';
+import { usePriceStream } from './hooks/usePriceStream';
+
+const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'RELIANCE.NS', 'TCS.NS'];
 
 export default function App() {
-  const [currentTime, setCurrentTime] = useState(new Date().toUTCString());
+  const [inWallet, setInWallet] = useState(null);
+  const [usWallet, setUsWallet] = useState(null);
+  const [checkingWallets, setCheckingWallets] = useState(true);
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [selectedTicker, setSelectedTicker] = useState('AAPL'); // default open ticker
+
+  // Live SSE stream for watchlist and active order ticket
+  const { prices } = usePriceStream(DEFAULT_TICKERS);
+
+  // Fetch wallets status
+  const refreshWallets = useCallback(async () => {
+    try {
+      const [inData, usData] = await Promise.all([
+        fetchWallet('IN'),
+        fetchWallet('US'),
+      ]);
+      setInWallet(inData);
+      setUsWallet(usData);
+
+      // If either wallet doesn't exist yet, trigger the setup modal
+      if (!inData || !usData) {
+        setShowWalletModal(true);
+      } else {
+        setShowWalletModal(false);
+      }
+    } catch (err) {
+      console.error('Error fetching wallets:', err);
+    } finally {
+      setCheckingWallets(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date().toUTCString().replace('GMT', 'UTC'));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+    refreshWallets();
+  }, [refreshWallets]);
+
+  // Determine which wallet corresponds to the selected ticker
+  const isSelectedIndian =
+    selectedTicker?.toUpperCase().endsWith('.NS') ||
+    selectedTicker?.toUpperCase().endsWith('.BO');
+  const activeWallet = isSelectedIndian ? inWallet : usWallet;
+  const activeQuote = selectedTicker ? prices[selectedTicker.toUpperCase()] : null;
 
   return (
     <div className="min-h-screen bg-base text-text-primary flex flex-col font-sans selection:bg-accent/30 selection:text-white">
-      {/* Top Terminal Navigation Bar */}
-      <header className="h-11 border-b border-border bg-[#101216] px-4 flex items-center justify-between select-none">
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2 text-text-primary">
-            <Activity className="w-4 h-4 text-accent" />
-            <span className="font-bold text-xs tracking-wider uppercase">
-              PaperTrade<span className="text-text-muted font-normal">.io</span>
-            </span>
-          </div>
-          <span className="text-border">|</span>
-          <span className="text-[11px] font-mono-tabular text-text-muted uppercase tracking-wider">
-            Terminal
-          </span>
-        </div>
-
-        {/* Global Clock */}
-        <div className="flex items-center space-x-4 text-[11px] font-mono-tabular text-text-muted">
-          <span>{currentTime}</span>
-        </div>
-      </header>
+      {/* Persistent Terminal Header with Wallets */}
+      <Header
+        inWallet={inWallet}
+        usWallet={usWallet}
+        onOpenWalletSetup={() => setShowWalletModal(true)}
+      />
 
       {/* Main Terminal Workspace */}
-      <main className="flex-1 p-6 flex flex-col items-center justify-start max-w-6xl w-full mx-auto">
-        <div className="w-full flex items-center justify-between mb-4">
+      <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-sm font-semibold tracking-wide text-text-primary uppercase">
-              Market Watch
+              Trading Terminal
             </h1>
-            <p className="text-xs text-text-muted mt-0.5">
-              Real-time polled tick stream from NSE & US markets via Server-Sent Events
+            <p className="text-xs text-text-muted mt-0.5 font-mono-tabular">
+              Select any asset to inspect and place simulated market orders
             </p>
           </div>
         </div>
 
-        {/* Watchlist Component */}
-        <Watchlist />
+        {/* Dual Layout: Watchlist on Left, Order Ticket on Right */}
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
+          {/* Watchlist Table */}
+          <div className="flex-1 w-full">
+            <Watchlist
+              selectedTicker={selectedTicker}
+              onSelectTicker={(ticker) => setSelectedTicker(ticker)}
+            />
+          </div>
+
+          {/* Docked Order Ticket Side Panel */}
+          {selectedTicker && (
+            <div className="w-full lg:w-auto shrink-0">
+              <OrderTicket
+                ticker={selectedTicker}
+                quote={activeQuote}
+                wallet={activeWallet}
+                onClose={() => setSelectedTicker(null)}
+                onOrderExecuted={() => {
+                  refreshWallets();
+                }}
+              />
+            </div>
+          )}
+        </div>
       </main>
+
+      {/* Wallet Setup First-Run Modal */}
+      <WalletSetupModal
+        isOpen={showWalletModal}
+        onComplete={() => {
+          refreshWallets();
+        }}
+        initialIN={inWallet?.starting_balance || 500000}
+        initialUS={usWallet?.starting_balance || 10000}
+      />
     </div>
   );
 }
