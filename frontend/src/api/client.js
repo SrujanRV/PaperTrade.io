@@ -62,3 +62,13 @@ export async function placeOrder({ market, ticker, side, quantity }) {
   }
   return await res.json();
 }
+
+export async function validateTicker(symbol) {
+  const res = await fetch(`/api/prices/validate?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Validation request failed for ${symbol}`);
+  }
+  return await res.json();
+}
+

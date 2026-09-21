@@ -1,7 +1,5 @@
-import React from 'react';
-import { usePriceStream } from '../hooks/usePriceStream';
-
-const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'RELIANCE.NS', 'TCS.NS'];
+import React, { useState } from 'react';
+import { validateTicker } from '../api/client';
 
 // Helper to determine exchange and currency from symbol
 function getTickerMeta(symbol) {
@@ -49,8 +47,48 @@ function formatChangePct(value) {
   return `${sign}${num.toFixed(2)}%`;
 }
 
-export function Watchlist({ selectedTicker, onSelectTicker }) {
-  const { prices, status } = usePriceStream(DEFAULT_TICKERS);
+export function Watchlist({
+  tickers = [],
+  prices = {},
+  connectionStatus = 'connected',
+  selectedTicker,
+  onSelectTicker,
+  onAddTicker,
+  onRemoveTicker,
+}) {
+  const [inputTicker, setInputTicker] = useState('');
+  const [validating, setValidating] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    const raw = inputTicker.trim().toUpperCase();
+    if (!raw) {
+      setError('ENTER A TICKER SYMBOL');
+      return;
+    }
+    if (tickers.includes(raw)) {
+      setError(`${raw} IS ALREADY IN WATCHLIST`);
+      return;
+    }
+
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await validateTicker(raw);
+      if (res.valid) {
+        onAddTicker(raw);
+        setInputTicker('');
+        setError(null);
+      } else {
+        setError(res.reason ? `INVALID TICKER: ${res.reason}` : `TICKER "${raw}" NOT FOUND`);
+      }
+    } catch (err) {
+      setError(`VALIDATION FAILED: ${err.message}`);
+    } finally {
+      setValidating(false);
+    }
+  }
 
   return (
     <div className="w-full max-w-4xl bg-surface border border-border rounded-none shadow-none overflow-hidden">
@@ -61,37 +99,92 @@ export function Watchlist({ selectedTicker, onSelectTicker }) {
             Watchlist
           </span>
           <span className="text-[11px] font-mono-tabular text-text-muted px-1.5 py-0.5 bg-base border border-border">
-            {DEFAULT_TICKERS.length} ASSETS
+            {tickers.length} ASSETS
           </span>
         </div>
 
         {/* Live SSE Connection Indicator */}
         <div className="flex items-center text-[11px] font-mono-tabular">
-          {status === 'connected' && (
+          {connectionStatus === 'connected' && (
             <span className="flex items-center text-text-muted">
               <span className="inline-block w-2 h-2 rounded-full bg-green mr-1.5 shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
               LIVE (SSE Connected)
             </span>
           )}
-          {status === 'connecting' && (
+          {connectionStatus === 'connecting' && (
             <span className="flex items-center text-[#e5a50a]">
               <span className="inline-block w-2 h-2 rounded-full bg-[#e5a50a] animate-pulse mr-1.5" />
               CONNECTING...
             </span>
           )}
-          {status === 'reconnecting' && (
+          {connectionStatus === 'reconnecting' && (
             <span className="flex items-center text-[#e5a50a]">
               <span className="inline-block w-2 h-2 rounded-full bg-[#e5a50a] animate-ping mr-1.5" />
               RECONNECTING...
             </span>
           )}
-          {status === 'error' && (
+          {connectionStatus === 'error' && (
             <span className="flex items-center text-red">
               <span className="inline-block w-2 h-2 rounded-full bg-red mr-1.5" />
               DISCONNECTED
             </span>
           )}
+          {connectionStatus === 'disconnected' && (
+            <span className="flex items-center text-text-muted">
+              <span className="inline-block w-2 h-2 rounded-full bg-[#525866] mr-1.5" />
+              IDLE
+            </span>
+          )}
         </div>
+      </div>
+
+      {/* Terminal Add Ticker Bar */}
+      <div className="px-3 py-2 bg-[#0f1115] border-b border-border flex flex-wrap items-center justify-between gap-2 select-none">
+        <form onSubmit={handleAdd} className="flex items-center space-x-2">
+          <span className="text-[11px] font-mono-tabular text-text-muted tracking-wider">
+            + ADD SYMBOL:
+          </span>
+          <input
+            type="text"
+            value={inputTicker}
+            onChange={(e) => {
+              setInputTicker(e.target.value.toUpperCase());
+              if (error) setError(null);
+            }}
+            placeholder="e.g. MSFT, INFY.NS"
+            disabled={validating}
+            className="w-40 px-2 py-1 text-xs font-mono-tabular uppercase bg-[#15171c] border border-border text-text-primary placeholder:text-[#525866] focus:outline-none focus:border-accent disabled:opacity-50 tracking-wider"
+          />
+          <button
+            type="submit"
+            disabled={validating || !inputTicker.trim()}
+            className="px-2.5 py-1 text-[11px] font-mono-tabular font-medium bg-[#232731] hover:bg-[#2e3442] text-text-primary border border-border uppercase tracking-wider transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center space-x-1.5"
+          >
+            {validating ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                <span>CHECKING...</span>
+              </>
+            ) : (
+              <span>+ ADD</span>
+            )}
+          </button>
+        </form>
+
+        {/* Inline Error Message */}
+        {error && (
+          <div className="flex items-center space-x-1.5 text-[11px] font-mono-tabular text-red bg-red/10 border border-red/30 px-2 py-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0" />
+            <span className="truncate max-w-xs">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-text-muted hover:text-text-primary ml-1 text-xs leading-none"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Watchlist Table */}
@@ -104,100 +197,124 @@ export function Watchlist({ selectedTicker, onSelectTicker }) {
               <th className="px-3 text-right font-medium">Last Price</th>
               <th className="px-3 text-right font-medium">Change</th>
               <th className="px-3 text-right font-medium">Status</th>
+              <th className="w-10 px-2 text-center font-medium"></th>
             </tr>
           </thead>
           <tbody>
-            {DEFAULT_TICKERS.map((ticker) => {
-              const meta = getTickerMeta(ticker);
-              const quote = prices[meta.symbol];
-              const price = quote?.current_price;
-              const changePct = quote?.change_percent ?? 0;
-              const isOpen = quote?.market_status === 'open';
-              const isPositive = changePct > 0;
-              const isNegative = changePct < 0;
+            {tickers.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="py-10 text-center text-xs font-mono-tabular text-text-muted">
+                  NO ASSETS IN WATCHLIST — Enter a ticker symbol above to start streaming.
+                </td>
+              </tr>
+            ) : (
+              tickers.map((ticker) => {
+                const meta = getTickerMeta(ticker);
+                const quote = prices[meta.symbol];
+                const price = quote?.current_price;
+                const changePct = quote?.change_percent ?? 0;
+                const isOpen = quote?.market_status === 'open';
+                const isPositive = changePct > 0;
+                const isNegative = changePct < 0;
 
-              // Color token for change
-              const changeColor = isPositive
-                ? 'text-green'
-                : isNegative
-                ? 'text-red'
-                : 'text-text-muted';
+                // Color token for change
+                const changeColor = isPositive
+                  ? 'text-green'
+                  : isNegative
+                  ? 'text-red'
+                  : 'text-text-muted';
 
-              // Determine tick flash animation class
-              const tickAnimationClass =
-                quote?.tickDirection === 'up'
-                  ? 'animate-tick-up'
-                  : quote?.tickDirection === 'down'
-                  ? 'animate-tick-down'
-                  : '';
+                // Determine tick flash animation class
+                const tickAnimationClass =
+                  quote?.tickDirection === 'up'
+                    ? 'animate-tick-up'
+                    : quote?.tickDirection === 'down'
+                    ? 'animate-tick-down'
+                    : '';
 
-              const isSelected = selectedTicker?.toUpperCase() === meta.symbol;
+                const isSelected = selectedTicker?.toUpperCase() === meta.symbol;
 
-              return (
-                <tr
-                  key={meta.symbol}
-                  onClick={() => onSelectTicker && onSelectTicker(meta.symbol, quote)}
-                  className={`h-[38px] border-b border-border transition-colors duration-150 group cursor-pointer ${
-                    isSelected
-                      ? 'bg-[#1c2027] border-l-2 border-l-accent'
-                      : 'hover:bg-surface-hover'
-                  }`}
-                >
-                  {/* Symbol Column */}
-                  <td className="px-3 py-0 align-middle">
-                    <div className="flex items-baseline space-x-2">
-                      <span className="text-xs font-semibold text-text-primary group-hover:text-white">
-                        {meta.display}
-                      </span>
-                      {meta.symbol.includes('.') && (
-                        <span className="text-[10px] text-text-muted font-mono-tabular">
-                          {meta.symbol.substring(meta.symbol.indexOf('.'))}
+                return (
+                  <tr
+                    key={meta.symbol}
+                    onClick={() => onSelectTicker && onSelectTicker(meta.symbol, quote)}
+                    className={`h-[38px] border-b border-border transition-colors duration-150 group cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#1c2027] border-l-2 border-l-accent'
+                        : 'hover:bg-surface-hover'
+                    }`}
+                  >
+                    {/* Symbol Column */}
+                    <td className="px-3 py-0 align-middle">
+                      <div className="flex items-baseline space-x-2">
+                        <span className="text-xs font-semibold text-text-primary group-hover:text-white">
+                          {meta.display}
                         </span>
-                      )}
-                    </div>
-                  </td>
+                        {meta.symbol.includes('.') && (
+                          <span className="text-[10px] text-text-muted font-mono-tabular">
+                            {meta.symbol.substring(meta.symbol.indexOf('.'))}
+                          </span>
+                        )}
+                      </div>
+                    </td>
 
-                  {/* Exchange Column */}
-                  <td className="px-3 py-0 align-middle">
-                    <span className="text-[11px] font-mono-tabular text-text-muted">
-                      {meta.exchange}
-                    </span>
-                  </td>
-
-                  {/* Last Price Column (Tabular, right-aligned, tick flash on price change) */}
-                  <td className="px-3 py-0 text-right align-middle font-mono-tabular">
-                    <div
-                      key={`${meta.symbol}-${quote?.tickId || 0}`}
-                      className={`inline-block px-1.5 py-0.5 rounded-sm text-xs font-medium text-text-primary transition-colors ${tickAnimationClass}`}
-                    >
-                      <span>{meta.currencySymbol}</span>
-                      <span>{formatPrice(price, meta.currency)}</span>
-                    </div>
-                  </td>
-
-                  {/* Change % Column (Tabular, right-aligned, colored) */}
-                  <td className="px-3 py-0 text-right align-middle font-mono-tabular">
-                    <span className={`text-xs font-medium ${changeColor}`}>
-                      {formatChangePct(changePct)}
-                    </span>
-                  </td>
-
-                  {/* Market Status Column (Understated dot + status text) */}
-                  <td className="px-3 py-0 text-right align-middle">
-                    <div className="inline-flex items-center space-x-1.5 text-[11px] font-mono-tabular">
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          isOpen ? 'bg-green' : 'bg-[#525866]'
-                        }`}
-                      />
-                      <span className={isOpen ? 'text-green font-medium' : 'text-text-muted'}>
-                        {isOpen ? 'OPEN' : 'CLOSED'}
+                    {/* Exchange Column */}
+                    <td className="px-3 py-0 align-middle">
+                      <span className="text-[11px] font-mono-tabular text-text-muted">
+                        {meta.exchange}
                       </span>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                    </td>
+
+                    {/* Last Price Column (Tabular, right-aligned, tick flash on price change) */}
+                    <td className="px-3 py-0 text-right align-middle font-mono-tabular">
+                      <div
+                        key={`${meta.symbol}-${quote?.tickId || 0}`}
+                        className={`inline-block px-1.5 py-0.5 rounded-sm text-xs font-medium text-text-primary transition-colors ${tickAnimationClass}`}
+                      >
+                        <span>{meta.currencySymbol}</span>
+                        <span>{formatPrice(price, meta.currency)}</span>
+                      </div>
+                    </td>
+
+                    {/* Change % Column (Tabular, right-aligned, colored) */}
+                    <td className="px-3 py-0 text-right align-middle font-mono-tabular">
+                      <span className={`text-xs font-medium ${changeColor}`}>
+                        {formatChangePct(changePct)}
+                      </span>
+                    </td>
+
+                    {/* Market Status Column (Understated dot + status text) */}
+                    <td className="px-3 py-0 text-right align-middle">
+                      <div className="inline-flex items-center space-x-1.5 text-[11px] font-mono-tabular">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isOpen ? 'bg-green' : 'bg-[#525866]'
+                          }`}
+                        />
+                        <span className={isOpen ? 'text-green font-medium' : 'text-text-muted'}>
+                          {isOpen ? 'OPEN' : 'CLOSED'}
+                        </span>
+                      </div>
+                    </td>
+
+                    {/* Remove Action Button */}
+                    <td className="w-10 px-2 py-0 text-center align-middle">
+                      <button
+                        type="button"
+                        title={`Remove ${meta.symbol} from watchlist`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onRemoveTicker) onRemoveTicker(meta.symbol);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-text-muted hover:text-red hover:bg-[#232731] w-5 h-5 inline-flex items-center justify-center text-xs transition-all font-mono-tabular"
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>

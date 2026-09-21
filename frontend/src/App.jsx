@@ -9,12 +9,31 @@ import { fetchWallet } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
 
 const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'RELIANCE.NS', 'TCS.NS'];
+const STORAGE_KEY = 'papertrade_watchlist';
+
+function loadInitialWatchlist() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load watchlist from localStorage:', err);
+  }
+  return DEFAULT_TICKERS;
+}
 
 export default function App() {
   const [inWallet, setInWallet] = useState(null);
   const [usWallet, setUsWallet] = useState(null);
   const [checkingWallets, setCheckingWallets] = useState(true);
   const [showWalletModal, setShowWalletModal] = useState(false);
+
+  // Dynamic user-editable watchlist stored in localStorage
+  const [watchlist, setWatchlist] = useState(loadInitialWatchlist);
 
   // Navigation tab state: 'watchlist' | 'portfolio' | 'history'
   const [activeTab, setActiveTab] = useState('watchlist');
@@ -28,16 +47,46 @@ export default function App() {
   // Trigger to force re-fetch of portfolio summary when orders execute
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Combine default tickers with all currently held tickers for comprehensive SSE streaming
+  const handleAddTicker = useCallback((ticker) => {
+    const sym = ticker.trim().toUpperCase();
+    setWatchlist((prev) => {
+      if (prev.includes(sym)) return prev;
+      const next = [...prev, sym];
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to save watchlist to localStorage:', e);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleRemoveTicker = useCallback((ticker) => {
+    const sym = ticker.trim().toUpperCase();
+    setWatchlist((prev) => {
+      const next = prev.filter((t) => t !== sym);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to save watchlist to localStorage:', e);
+      }
+      return next;
+    });
+    if (selectedTicker?.toUpperCase() === sym) {
+      setSelectedTicker(null);
+    }
+  }, [selectedTicker]);
+
+  // Combine watchlist tickers with all currently held tickers for comprehensive SSE streaming
   const subscribedTickers = useMemo(() => {
-    const set = new Set(DEFAULT_TICKERS);
+    const set = new Set(watchlist);
     inWallet?.holdings?.forEach((h) => set.add(h.ticker));
     usWallet?.holdings?.forEach((h) => set.add(h.ticker));
     return Array.from(set);
-  }, [inWallet, usWallet]);
+  }, [watchlist, inWallet, usWallet]);
 
   // Live SSE stream for all active assets
-  const { prices } = usePriceStream(subscribedTickers);
+  const { prices, status: connectionStatus } = usePriceStream(subscribedTickers);
 
   // Fetch wallets state
   const refreshWallets = useCallback(async () => {
@@ -136,8 +185,13 @@ export default function App() {
           <div className="flex-1 w-full">
             {activeTab === 'watchlist' && (
               <Watchlist
+                tickers={watchlist}
+                prices={prices}
+                connectionStatus={connectionStatus}
                 selectedTicker={selectedTicker}
                 onSelectTicker={(ticker) => setSelectedTicker(ticker)}
+                onAddTicker={handleAddTicker}
+                onRemoveTicker={handleRemoveTicker}
               />
             )}
 
