@@ -194,7 +194,7 @@ export function Portfolio({
                 ? 'text-green'
                 : totalRealizedPnL < 0
                 ? 'text-red'
-                : 'text-text-muted'
+                : 'text-text-primary'
             }`}
           >
             {currencySymbol}
@@ -283,7 +283,7 @@ export function Portfolio({
                       </td>
 
                       {/* Avg Buy Price */}
-                      <td className="px-3 py-0 text-right align-middle text-text-muted">
+                      <td className="px-3 py-0 text-right align-middle text-text-primary font-medium">
                         {currencySymbol}
                         {formatMoney(h.avg_buy_price, currency)}
                       </td>

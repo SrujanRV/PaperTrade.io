@@ -16,7 +16,7 @@ export default function App() {
   const [checkingWallets, setCheckingWallets] = useState(true);
   const [showWalletModal, setShowWalletModal] = useState(false);
 
-  // Navigation tab state: 'watchlist' | 'portfolio'
+  // Navigation tab state: 'watchlist' | 'portfolio' | 'history'
   const [activeTab, setActiveTab] = useState('watchlist');
 
   // Portfolio selected market: 'IN' | 'US'

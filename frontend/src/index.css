@@ -22,6 +22,12 @@
   }
 }
 
+@layer utilities {
+  .bg-base {
+    background-color: var(--bg-base);
+  }
+}
+
 /* Tabular figures + slashed zero for all numerics */
 .font-mono-tabular {
   font-family: 'IBM Plex Mono', monospace;

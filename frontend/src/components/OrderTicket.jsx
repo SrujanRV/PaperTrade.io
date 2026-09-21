@@ -331,7 +331,7 @@ export function OrderTicket({
             </div>
             <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
               <span>AVAILABLE CASH:</span>
-              <span className={hasInsufficientFunds ? 'text-red font-medium' : 'text-text-muted'}>
+              <span className={hasInsufficientFunds ? 'text-red font-medium' : 'text-text-primary font-medium'}>
                 {currencySymbol}
                 {cashBalance.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
                   minimumFractionDigits: 2,
