@@ -43,10 +43,18 @@ backend/
   test_order_engine.py      # Phase 2b smoke tests (10 scenarios)
   test_sse_stream.py        # Step 3 SSE streaming tests (3 scenarios)
 
-frontend/                   # Frontend phases — planned
+frontend/
+  package.json
+  vite.config.js
+  tailwind.config.js
   src/
     components/
-    api/
+      Watchlist.jsx         # 38px dense terminal table, right-aligned tabular numerics, 400ms tick-flash
+    hooks/
+      usePriceStream.js     # SSE EventSource wrapper with tick-direction detection
+    App.jsx                 # Terminal layout & clock
+    index.css               # Token variables, tabular-nums utility, tick-flash keyframes
+    main.jsx
 ```
 
 ---
@@ -58,14 +66,15 @@ frontend/                   # Frontend phases — planned
 | **2a** | SQLite models · dual wallets (INR + USD) · setup endpoints | ✅ Done |
 | **2b** | Order engine · portfolio P&L · order history | ✅ Done |
 | **3** | Real-time SSE price streaming (`/api/prices/stream?tickers=...`) | ✅ Done |
-| **4** | React frontend · Watchlist · Balance setup screen | ⬜ Planned |
+| **4** | React Terminal UI · Watchlist Component · SSE Hook | ✅ Done |
 | **5** | Trading UI · Order form · Portfolio view · Transaction log | ⬜ Planned |
 | **6** | Limit/stop-loss orders · Charts · Indicators · Backtesting | ⬜ Planned |
 
 ---
 
-## Getting Started (Backend)
+## Getting Started
 
+### 1. Start Backend API (FastAPI)
 ```bash
 cd backend
 python -m venv venv
@@ -79,9 +88,18 @@ python test_wallet.py
 python test_order_engine.py
 python test_sse_stream.py
 
-# Start the API server
+# Start the API server on http://localhost:8000
 uvicorn main:app --reload
 ```
+
+### 2. Start Frontend Terminal (Vite + React)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open your browser to: **http://localhost:5173** (proxies `/api` to backend port 8000).
 
 Swagger UI → **http://localhost:8000/docs**
 

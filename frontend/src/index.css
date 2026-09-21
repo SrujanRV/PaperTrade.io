@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-base: #0c0d10;
+    --bg-surface: #15171c;
+    --bg-hover: #1c2026;
+    --border-subtle: #232731;
+    --text-primary: #e6e8ec;
+    --text-muted: #707788;
+    --market-green: #00c076;
+    --market-red: #f23645;
+    --accent-action: #2962ff;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
+/* Tabular figures + slashed zero for all numerics */
+.font-mono-tabular {
+  font-family: 'IBM Plex Mono', monospace;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Price tick-flash animations (~400ms subtle fade) */
+@keyframes flash-green {
+  0% {
+    background-color: rgba(0, 192, 118, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-red {
+  0% {
+    background-color: rgba(242, 54, 69, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-tick-up {
+  animation: flash-green 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-tick-down {
+  animation: flash-red 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Scrollbar styling for terminal tables */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0c0d10;
+}
+::-webkit-scrollbar-thumb {
+  background: #232731;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #323846;
+}
