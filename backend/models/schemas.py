@@ -31,7 +31,7 @@ class WalletSetupRequest(BaseModel):
 
 
 class HoldingOut(BaseModel):
-    """Holding row as returned by GET /api/wallet/{market}"""
+    """Holding row — plain, no live price (used by GET /api/wallet/{market})"""
     id: int
     ticker: str
     quantity: float
@@ -54,14 +54,51 @@ class WalletOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Order (stub — body not used until Phase 2b) ───────────────────────────────
+# ── Holdings with live P&L (used by /summary) ─────────────────────────────────
+
+class HoldingWithPnLOut(BaseModel):
+    """Holding enriched with live price and unrealized P&L"""
+    id: int
+    ticker: str
+    quantity: float
+    avg_buy_price: float
+    current_price: float
+    current_value: float
+    cost_basis: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    currency: str
+    market_open: bool
+    price_error: str | None = None
+
+
+class WalletSummaryOut(BaseModel):
+    """Full portfolio snapshot: cash + live holdings + P&L totals"""
+    wallet_id: int
+    market: str
+    currency: str
+    cash_balance: float
+    starting_balance: float
+    holdings: list[HoldingWithPnLOut] = []
+    total_holdings_value: float
+    total_wallet_value: float      # cash + holdings value
+    total_unrealized_pnl: float
+    total_realized_pnl: float
+
+
+# ── Orders ────────────────────────────────────────────────────────────────────
 
 class OrderRequest(BaseModel):
-    """Body for POST /api/orders (Phase 2b)"""
-    market: Literal["IN", "US"]
-    ticker: str = Field(..., min_length=1, max_length=20)
+    """Body for POST /api/orders"""
+    market: Literal["IN", "US"] = Field(
+        ..., description="Which wallet to trade from"
+    )
+    ticker: str = Field(
+        ..., min_length=1, max_length=20,
+        description="Ticker symbol — use .NS suffix for NSE (e.g. RELIANCE.NS) or plain for US (e.g. AAPL)"
+    )
     side: Literal["buy", "sell"]
-    quantity: float = Field(..., gt=0)
+    quantity: float = Field(..., gt=0, description="Number of shares/units — must be > 0")
 
     @field_validator("ticker")
     @classmethod
@@ -70,7 +107,7 @@ class OrderRequest(BaseModel):
 
 
 class OrderOut(BaseModel):
-    """Order row as returned from the API"""
+    """Order record — returned for both filled and rejected orders"""
     id: int
     wallet_id: int
     ticker: str
@@ -87,8 +124,10 @@ class OrderOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Transactions ───────────────────────────────────────────────────────────────
+
 class TransactionOut(BaseModel):
-    """Transaction ledger entry"""
+    """Immutable ledger entry for every filled order"""
     id: int
     wallet_id: int
     order_id: int
@@ -98,6 +137,7 @@ class TransactionOut(BaseModel):
     price: float
     total_value: float
     cash_balance_after: float
+    realized_pnl: float | None   # non-null for sell transactions
     timestamp: datetime
 
     model_config = {"from_attributes": True}

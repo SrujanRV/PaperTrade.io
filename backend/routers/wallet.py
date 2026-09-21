@@ -12,6 +12,7 @@ Phase 2b will add:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from typing import Literal
 
@@ -20,7 +21,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.orm import Wallet
-from models.schemas import WalletOut, WalletSetupRequest
+from models.schemas import HoldingWithPnLOut, WalletOut, WalletSetupRequest, WalletSummaryOut
+from services.portfolio import get_wallet_summary
 
 logger = logging.getLogger(__name__)
 
@@ -94,3 +96,45 @@ def get_wallet(
                    f"Call POST /api/wallet/setup first.",
         )
     return WalletOut.model_validate(wallet)
+
+
+# ── GET /api/wallet/{market}/summary ─────────────────────────────────────────
+
+@router.get(
+    "/{market}/summary",
+    response_model=WalletSummaryOut,
+    summary="Full portfolio snapshot",
+    description=(
+        "Returns cash balance, all open holdings with live prices and unrealized P&L, "
+        "total portfolio value, total unrealized P&L, and total realized P&L from all sells."
+    ),
+)
+def wallet_summary(
+    market: Literal["IN", "US"],
+    db: Session = Depends(get_db),
+) -> WalletSummaryOut:
+    wallet = db.query(Wallet).filter(Wallet.market == market).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No wallet found for market '{market}'. "
+                   f"Call POST /api/wallet/setup first.",
+        )
+
+    summary = get_wallet_summary(db, wallet)
+
+    return WalletSummaryOut(
+        wallet_id=summary.wallet_id,
+        market=summary.market,
+        currency=summary.currency,
+        cash_balance=summary.cash_balance,
+        starting_balance=summary.starting_balance,
+        holdings=[
+            HoldingWithPnLOut(**dataclasses.asdict(h))
+            for h in summary.holdings
+        ],
+        total_holdings_value=summary.total_holdings_value,
+        total_wallet_value=summary.total_wallet_value,
+        total_unrealized_pnl=summary.total_unrealized_pnl,
+        total_realized_pnl=summary.total_realized_pnl,
+    )

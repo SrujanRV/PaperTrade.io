@@ -2,18 +2,21 @@
 main.py — FastAPI application entry point.
 
 Phase 1: price feed (prices router)
-Phase 2: database models + wallet setup (wallet router)
+Phase 2a: database models + wallet setup (wallet router)
+Phase 2b: order engine + portfolio P&L (orders router, wallet summary)
 """
 
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect as sa_inspect, text
 
 from config import CORS_ORIGINS
 from database import Base, engine
 from routers.prices import router as prices_router
 from routers.wallet import router as wallet_router
+from routers.orders import router as orders_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -22,12 +25,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Create DB tables (idempotent — safe to call on every startup) ─────────────
-# Import all ORM models so Base.metadata knows about them before create_all()
-import models.orm  # noqa: F401  (side-effect import registers the mappers)
+# ── Register ORM mappers then create/verify tables ────────────────────────────
+import models.orm  # noqa: F401  — side-effect: registers all ORM models with Base
 
 Base.metadata.create_all(bind=engine)
 logger.info("Database tables verified / created at startup")
+
+# ── Schema migrations (safe to run on every startup) ─────────────────────────
+# Add any columns introduced after the initial schema creation.
+_inspector = sa_inspect(engine)
+if "transactions" in _inspector.get_table_names():
+    _existing_cols = {c["name"] for c in _inspector.get_columns("transactions")}
+    if "realized_pnl" not in _existing_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE transactions ADD COLUMN realized_pnl FLOAT DEFAULT NULL"))
+            _conn.commit()
+        logger.info("Migration applied: added 'realized_pnl' column to transactions")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -48,10 +61,10 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(prices_router)
 app.include_router(wallet_router)
+app.include_router(orders_router)
 
-# Phase 2b+ routers will be added here:
-# app.include_router(orders_router)
-# app.include_router(portfolio_router)
+# Phase 3+ routers will be added here:
+# app.include_router(portfolio_router)  # standalone portfolio endpoints if needed
 
 
 @app.get("/api/health")

@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey,
-    Integer, String, UniqueConstraint, text,
+    DateTime, Float, ForeignKey,
+    Integer, String, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -161,6 +161,7 @@ class Transaction(Base):
     price: Mapped[float] = mapped_column(Float, nullable=False)
     total_value: Mapped[float] = mapped_column(Float, nullable=False)
     cash_balance_after: Mapped[float] = mapped_column(Float, nullable=False)
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
