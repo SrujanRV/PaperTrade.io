@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { setupWallet } from '../api/client';
-import { ShieldCheck, AlertCircle } from 'lucide-react';
 
 export function WalletSetupModal({ isOpen, onComplete, initialIN = 500000, initialUS = 10000 }) {
   const [inBalance, setInBalance] = useState(initialIN);
@@ -37,7 +36,7 @@ export function WalletSetupModal({ isOpen, onComplete, initialIN = 500000, initi
         {/* Terminal Header */}
         <div className="h-10 px-4 bg-[#111317] border-b border-border flex items-center justify-between select-none">
           <div className="flex items-center space-x-2 text-xs font-semibold tracking-wider text-text-primary uppercase">
-            <ShieldCheck className="w-4 h-4 text-accent" />
+            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
             <span>Terminal Setup // Wallet Initialization</span>
           </div>
         </div>
@@ -49,7 +48,7 @@ export function WalletSetupModal({ isOpen, onComplete, initialIN = 500000, initi
 
           {error && (
             <div className="p-3 bg-red/10 border border-red/40 text-red text-xs font-mono-tabular flex items-start space-x-2">
-              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0 mt-1" />
               <span>{error}</span>
             </div>
           )}

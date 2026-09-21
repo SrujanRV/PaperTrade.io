@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, AlertCircle, CheckCircle2, Lock } from 'lucide-react';
+import { X } from 'lucide-react';
 import { placeOrder } from '../api/client';
 
 export function OrderTicket({
@@ -172,10 +172,11 @@ export function OrderTicket({
 
         {/* Market Closed Warning */}
         {!isMarketOpen && (
-          <div className="mt-3 p-2 bg-[#1b1c20] border border-border text-[11px] text-text-muted flex items-center space-x-2">
-            <Lock className="w-3.5 h-3.5 text-[#e5a50a] shrink-0" />
+          <div className="mt-3 p-2 bg-[#1b1c20] border border-border text-[11px] text-text-muted flex items-center space-x-2 font-mono-tabular">
+            <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0" />
             <span>
-              Exchange is closed. Order execution is blocked until session open.
+              <strong className="text-red uppercase font-semibold mr-1.5">MARKET CLOSED —</strong>
+              order execution blocked until session open.
             </span>
           </div>
         )}
@@ -184,15 +185,15 @@ export function OrderTicket({
       {/* Filled Order State */}
       {filledOrder ? (
         <div className="p-5 text-center space-y-4 font-mono-tabular">
-          <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-green/10 text-green border border-green/30">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-xs font-semibold tracking-wider text-green uppercase">
+          <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
+            <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
+            <span>
               ORDER FILLED @ {currencySymbol}
               {Number(filledOrder.executed_price).toFixed(2)}
-            </div>
-            <p className="text-[11px] text-text-muted mt-1">
+            </span>
+          </div>
+          <div>
+            <p className="text-[11px] text-text-muted">
               {filledOrder.side.toUpperCase()} {filledOrder.quantity} {upper}
             </p>
           </div>
@@ -227,11 +228,11 @@ export function OrderTicket({
         <form onSubmit={handleOrderSubmit} className="p-4 space-y-4">
           {/* Error / Rejection Banner */}
           {errorMsg && (
-            <div className="p-2.5 bg-red/10 border border-red/40 text-red text-xs font-mono-tabular flex items-start space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="p-2.5 bg-red/10 border border-red/40 text-xs font-mono-tabular flex items-start space-x-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0 mt-1.5" />
               <div className="leading-snug">
-                <span className="font-semibold block uppercase">Rejected</span>
-                <span>{errorMsg}</span>
+                <span className="font-semibold block uppercase text-red">ORDER REJECTED</span>
+                <span className="text-text-primary text-[11px] mt-0.5 block">{errorMsg}</span>
               </div>
             </div>
           )}
