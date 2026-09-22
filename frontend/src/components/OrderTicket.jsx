@@ -10,6 +10,7 @@ export function OrderTicket({
   onClose,
   onOrderExecuted,
   onOpenWalletSetup,
+  onOpenChart,
 }) {
   const [orderType, setOrderType] = useState('market'); // 'market' | 'limit' | 'stop_loss'
   const [side, setSide] = useState('buy'); // 'buy' | 'sell'
@@ -240,6 +241,7 @@ export function OrderTicket({
         ticker={upper}
         quote={quote}
         currencySymbol={currencySymbol}
+        onExpandChart={onOpenChart}
       />
 
       {/* Missing Wallet Inline Notice */}

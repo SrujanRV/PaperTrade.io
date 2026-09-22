@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { BarChart2 } from 'lucide-react';
 import { validateTicker, searchTickers } from '../api/client';
 
 // Helper to determine exchange and currency from symbol
@@ -57,6 +58,7 @@ export function Watchlist({
   onSelectTicker,
   onAddTicker,
   onRemoveTicker,
+  onOpenChart,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -397,7 +399,7 @@ export function Watchlist({
                 <th className="px-3 text-right font-medium">Last Price</th>
                 <th className="px-3 text-right font-medium">Change</th>
                 <th className="px-3 text-right font-medium">Status</th>
-                <th className="w-10 px-2 text-center font-medium"></th>
+                <th className="w-16 px-2 text-center font-medium"></th>
               </tr>
             </thead>
             <tbody>
@@ -497,19 +499,32 @@ export function Watchlist({
                         </div>
                       </td>
 
-                      {/* Remove Action Button */}
-                      <td className="w-10 px-2 py-0 text-center align-middle">
-                        <button
-                          type="button"
-                          title={`Remove ${meta.symbol} from ${selectedMarket} watchlist`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onRemoveTicker) onRemoveTicker(meta.symbol, selectedMarket);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-text-muted hover:text-red hover:bg-[#232731] w-5 h-5 inline-flex items-center justify-center text-xs transition-all font-mono-tabular"
-                        >
-                          ✕
-                        </button>
+                      {/* Action Buttons: Open Chart + Remove */}
+                      <td className="w-16 px-2 py-0 text-center align-middle">
+                        <div className="flex items-center justify-center space-x-1">
+                          <button
+                            type="button"
+                            title={`Open candlestick chart for ${meta.symbol}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onOpenChart) onOpenChart(meta.symbol);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-text-muted hover:text-accent hover:bg-[#232731] w-5 h-5 inline-flex items-center justify-center transition-all"
+                          >
+                            <BarChart2 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            title={`Remove ${meta.symbol} from ${selectedMarket} watchlist`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onRemoveTicker) onRemoveTicker(meta.symbol, selectedMarket);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-text-muted hover:text-red hover:bg-[#232731] w-5 h-5 inline-flex items-center justify-center text-xs transition-all font-mono-tabular"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

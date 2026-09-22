@@ -27,7 +27,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from config import SSE_PUSH_INTERVAL_SECONDS, SSE_PING_INTERVAL_SECONDS
-from services.price_feed import get_quotes, get_quote, is_market_open, search_symbols
+from services.price_feed import (
+    get_quotes,
+    get_quote,
+    is_market_open,
+    search_symbols,
+    get_previous_close,
+    get_historical_candles,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/prices", tags=["prices"])
@@ -216,4 +223,42 @@ async def search_tickers(
     Example: GET /api/prices/search?q=Tata&market=IN
     """
     return search_symbols(query=q, market=market)
+
+
+# ── /api/prices/{ticker}/previous-close ───────────────────────────────────────
+
+@router.get("/{ticker}/previous-close")
+async def previous_close(
+    ticker: str,
+):
+    """
+    Return yesterday's closing price for the specified ticker.
+
+    Example: GET /api/prices/AAPL/previous-close
+    """
+    sym = ticker.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Ticker symbol required")
+    data = get_previous_close(sym)
+    return data
+
+
+# ── /api/prices/{ticker}/history ──────────────────────────────────────────────
+
+@router.get("/{ticker}/history")
+async def price_history(
+    ticker: str,
+    range: str = Query("1d", description="Time range: '1d', '1w', '1m'"),
+    interval: str | None = Query(None, description="Candle interval, e.g. '5m', '15m', '1d'"),
+):
+    """
+    Return OHLC historical candles for the specified ticker and time range.
+
+    Example: GET /api/prices/AAPL/history?range=1w&interval=15m
+    """
+    sym = ticker.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Ticker symbol required")
+    candles = get_historical_candles(sym, range_str=range, interval_str=interval)
+    return candles
 

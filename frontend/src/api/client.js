@@ -154,6 +154,31 @@ export async function deleteWallet(market) {
   return await res.json();
 }
 
+export async function fetchPreviousClose(ticker) {
+  if (!ticker) return null;
+  const res = await fetch(`/api/prices/${encodeURIComponent(ticker.trim().toUpperCase())}/previous-close`);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch previous close for ${ticker}`);
+  }
+  return await res.json();
+}
+
+export async function fetchPriceHistory(ticker, range = '1d', interval = null) {
+  if (!ticker) return [];
+  let url = `/api/prices/${encodeURIComponent(ticker.trim().toUpperCase())}/history?range=${encodeURIComponent(range)}`;
+  if (interval) {
+    url += `&interval=${encodeURIComponent(interval)}`;
+  }
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch price history for ${ticker}`);
+  }
+  return await res.json();
+}
+
+
 
 
 

@@ -403,3 +403,136 @@ def search_symbols(query: str, market: str = "US") -> list[dict]:
     _search_cache[cache_key] = (now, results)
     return results
 
+
+# ── Historical Candles & Previous Close ───────────────────────────────────────
+
+_history_cache: dict[str, tuple[float, list[dict]]] = {}
+_prev_close_cache: dict[str, tuple[float, dict]] = {}
+
+
+def get_previous_close(ticker: str) -> dict:
+    """
+    Returns yesterday's closing price for the specified ticker.
+    Uses yfinance 5d daily history and takes the prior session's close.
+    """
+    sym = ticker.strip().upper()
+    now = time.monotonic()
+    if sym in _prev_close_cache:
+        cached_time, cached_data = _prev_close_cache[sym]
+        if (now - cached_time) < 300:  # 5 min TTL
+            return cached_data
+
+    exchange = _detect_exchange(sym)
+    currency = _detect_currency(exchange)
+
+    prev_close = 0.0
+    close_date = ""
+
+    try:
+        t = yf.Ticker(sym)
+        hist = t.history(period="5d", interval="1d", auto_adjust=True)
+        if hist is not None and not hist.empty:
+            if len(hist) >= 2:
+                prev_close = _safe_float(hist["Close"].iloc[-2])
+                close_date = str(hist.index[-2].date())
+            elif len(hist) == 1:
+                prev_close = _safe_float(hist["Close"].iloc[-1])
+                close_date = str(hist.index[-1].date())
+    except Exception as exc:
+        logger.warning("Failed to fetch historical prev_close for %s: %s", sym, exc)
+
+    if prev_close <= 0:
+        # Fallback to cached quote prev_close
+        quote = get_quote(sym)
+        if quote and quote.prev_close > 0:
+            prev_close = quote.prev_close
+
+    result = {
+        "ticker": sym,
+        "previous_close": round(prev_close, 4),
+        "currency": currency,
+        "date": close_date,
+    }
+    _prev_close_cache[sym] = (now, result)
+    return result
+
+
+def get_historical_candles(
+    ticker: str,
+    range_str: str = "1d",
+    interval_str: str | None = None,
+) -> list[dict]:
+    """
+    Returns OHLC candle data (open, high, low, close, volume, time) for a ticker.
+    Supported ranges:
+      - 1D: intraday candles (default 5m)
+      - 1W: multi-day intraday candles (default 15m)
+      - 1M: daily candles (default 1d)
+    """
+    sym = ticker.strip().upper()
+    r = range_str.strip().lower()
+
+    # Map range to yfinance period & default interval
+    if r in ("1d", "day", "intraday"):
+        period = "1d"
+        interval = interval_str or "5m"
+        ttl = 30  # 30s TTL for live intraday
+    elif r in ("1w", "5d", "week"):
+        period = "5d"
+        interval = interval_str or "15m"
+        ttl = 120  # 2m TTL
+    elif r in ("1m", "1mo", "month"):
+        period = "1mo"
+        interval = interval_str or "1d"
+        ttl = 300  # 5m TTL
+    else:
+        period = "1d"
+        interval = interval_str or "5m"
+        ttl = 30
+
+    cache_key = f"{sym}:{period}:{interval}"
+    now = time.monotonic()
+    if cache_key in _history_cache:
+        cached_time, cached_data = _history_cache[cache_key]
+        if (now - cached_time) < ttl:
+            return cached_data
+
+    candles: list[dict] = []
+    try:
+        t = yf.Ticker(sym)
+        df = t.history(period=period, interval=interval, auto_adjust=True)
+
+        # Fallback: if period="1d" is empty (e.g. weekend or non-trading hours),
+        # fetch 5d and take the most recent session
+        if (df is None or df.empty) and period == "1d":
+            df_fallback = t.history(period="5d", interval=interval, auto_adjust=True)
+            if df_fallback is not None and not df_fallback.empty:
+                last_date = df_fallback.index[-1].date()
+                df = df_fallback[df_fallback.index.date == last_date]
+
+        if df is not None and not df.empty:
+            for idx, row in df.iterrows():
+                close_val = _safe_float(row.get("Close"))
+                if close_val <= 0:
+                    continue
+
+                open_val = _safe_float(row.get("Open"), close_val)
+                high_val = _safe_float(row.get("High"), max(open_val, close_val))
+                low_val = _safe_float(row.get("Low"), min(open_val, close_val))
+                vol_val = _safe_int(row.get("Volume", 0))
+
+                candles.append({
+                    "time": int(idx.timestamp()),
+                    "open": round(open_val, 4),
+                    "high": round(high_val, 4),
+                    "low": round(low_val, 4),
+                    "close": round(close_val, 4),
+                    "volume": vol_val,
+                })
+    except Exception as exc:
+        logger.warning("Failed to fetch historical candles for %s (%s, %s): %s", sym, period, interval, exc)
+
+    _history_cache[cache_key] = (now, candles)
+    return candles
+
+

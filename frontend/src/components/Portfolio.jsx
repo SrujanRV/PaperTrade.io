@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BarChart2 } from 'lucide-react';
 import { fetchWalletSummary } from '../api/client';
 
 function formatMoney(amount, currency) {
@@ -33,6 +34,7 @@ export function Portfolio({
   selectedMarket = 'IN',
   onSelectMarket,
   onSelectTicker,
+  onOpenChart,
   onGoToWatchlist,
   onOpenWalletSetup,
   livePrices = {},
@@ -345,12 +347,22 @@ export function Portfolio({
 
                       {/* Trade Action */}
                       <td className="px-3 py-0 text-right align-middle">
-                        <button
-                          onClick={() => onSelectTicker && onSelectTicker(h.ticker)}
-                          className="px-2 py-1 bg-base border border-border text-[10px] text-text-primary hover:border-accent hover:text-white uppercase font-sans font-medium transition-colors"
-                        >
-                          TRADE
-                        </button>
+                        <div className="flex items-center justify-end space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onOpenChart && onOpenChart(h.ticker)}
+                            title={`Open candlestick chart for ${h.ticker}`}
+                            className="p-1 text-text-muted hover:text-accent hover:bg-base border border-transparent hover:border-border transition-colors flex items-center justify-center"
+                          >
+                            <BarChart2 size={13} />
+                          </button>
+                          <button
+                            onClick={() => onSelectTicker && onSelectTicker(h.ticker)}
+                            className="px-2 py-1 bg-base border border-border text-[10px] text-text-primary hover:border-accent hover:text-white uppercase font-sans font-medium transition-colors"
+                          >
+                            TRADE
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

@@ -7,6 +7,7 @@ import { TradeLog } from './components/TradeLog';
 import { OrderTicket } from './components/OrderTicket';
 import { WalletSetupModal } from './components/WalletSetupModal';
 import { SettingsModal } from './components/SettingsModal';
+import { CandlestickChartModal } from './components/CandlestickChartModal';
 import { fetchWallet, fetchPendingOrders, fetchOrders } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
 
@@ -96,6 +97,9 @@ export default function App() {
 
   // Active ticker open in OrderTicket side panel
   const [selectedTicker, setSelectedTicker] = useState(null);
+
+  // Active ticker open in full CandlestickChartModal
+  const [fullChartTicker, setFullChartTicker] = useState(null);
 
   // Trigger to force re-fetch of portfolio summary when orders execute
   const [refreshKey, setRefreshKey] = useState(0);
@@ -370,6 +374,7 @@ export default function App() {
                 onSelectTicker={(ticker) => setSelectedTicker(ticker)}
                 onAddTicker={handleAddTicker}
                 onRemoveTicker={handleRemoveTicker}
+                onOpenChart={(ticker) => setFullChartTicker(ticker)}
               />
             )}
 
@@ -378,6 +383,7 @@ export default function App() {
                 selectedMarket={portfolioMarket}
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onSelectTicker={(ticker) => setSelectedTicker(ticker)}
+                onOpenChart={(ticker) => setFullChartTicker(ticker)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
                 onOpenWalletSetup={handleOpenWalletSetup}
                 livePrices={prices}
@@ -420,11 +426,24 @@ export default function App() {
                 onClose={() => setSelectedTicker(null)}
                 onOrderExecuted={handleOrderExecuted}
                 onOpenWalletSetup={handleOpenWalletSetup}
+                onOpenChart={(ticker) => setFullChartTicker(ticker)}
               />
             </div>
           )}
         </div>
       </main>
+
+      {/* Dedicated Candlestick Chart Modal */}
+      <CandlestickChartModal
+        isOpen={Boolean(fullChartTicker)}
+        ticker={fullChartTicker}
+        quote={fullChartTicker ? prices[fullChartTicker.toUpperCase()] : null}
+        onClose={() => setFullChartTicker(null)}
+        onTrade={(tickerToTrade) => {
+          setSelectedTicker(tickerToTrade);
+          setFullChartTicker(null);
+        }}
+      />
 
       {/* Dedicated Dismissible Wallet Setup Modal */}
       <WalletSetupModal
