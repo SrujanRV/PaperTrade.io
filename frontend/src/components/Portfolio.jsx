@@ -307,15 +307,23 @@ export function Portfolio({
                           </span>
                           {h.square_off_date && (
                             <div className="mt-0.5 flex items-center">
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono-tabular font-bold tracking-wider uppercase border ${
-                                h.is_intraday || h.square_off_date <= new Date().toISOString().split('T')[0]
-                                  ? 'bg-accent/15 text-accent border-accent/40'
-                                  : 'bg-purple-900/30 text-purple-300 border-purple-500/40'
-                              }`}>
-                                {h.is_intraday || h.square_off_date <= new Date().toISOString().split('T')[0]
-                                  ? 'AUTO SQ-OFF: TODAY (CLOSE)'
-                                  : `SQ-OFF: ${new Date(h.square_off_date + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }).toUpperCase()}`}
-                              </span>
+                              {(() => {
+                                const isToday = h.is_intraday || h.square_off_date <= new Date().toISOString().split('T')[0];
+                                const hasPartial = h.square_off_quantity && h.square_off_quantity < h.quantity;
+                                const dateStr = new Date(h.square_off_date + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }).toUpperCase();
+                                const label = isToday
+                                  ? (hasPartial ? `AUTO SQ-OFF: ${h.square_off_quantity} SHS TODAY` : 'AUTO SQ-OFF: TODAY (CLOSE)')
+                                  : (hasPartial ? `SQ-OFF: ${h.square_off_quantity} SHS (${dateStr})` : `SQ-OFF: ${dateStr}`);
+                                return (
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono-tabular font-bold tracking-wider uppercase border ${
+                                    isToday
+                                      ? 'bg-accent/15 text-accent border-accent/40'
+                                      : 'bg-purple-900/30 text-purple-300 border-purple-500/40'
+                                  }`}>
+                                    {label}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>

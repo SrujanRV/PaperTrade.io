@@ -41,6 +41,8 @@ class HoldingPnL:
     market_open: bool
     square_off_date: date | None = None
     is_intraday: bool = False
+    square_off_quantity: float | None = None
+    lots: list[dict] = field(default_factory=list)
     price_error: str | None = None
 
 
@@ -80,6 +82,21 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
     for h in holdings:
         q = quotes.get(h.ticker)
 
+        # Calculate square-off quantity and lots list
+        timed_lots = [l for l in (h.lots or []) if l.square_off_date is not None]
+        sq_off_qty = round(sum(l.quantity for l in timed_lots), 8) if timed_lots else None
+        lots_data = [
+            {
+                "id": l.id,
+                "quantity": l.quantity,
+                "buy_price": l.buy_price,
+                "square_off_date": l.square_off_date,
+                "is_intraday": l.is_intraday,
+                "created_at": l.created_at,
+            }
+            for l in (h.lots or [])
+        ]
+
         if q is None or q.error:
             error_msg = (q.error if q else f"No quote returned for {h.ticker}")
             logger.warning("Could not price holding %s: %s", h.ticker, error_msg)
@@ -98,6 +115,8 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     market_open=False,
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
+                    square_off_quantity=sq_off_qty,
+                    lots=lots_data,
                     price_error=error_msg,
                 )
             )
@@ -124,6 +143,8 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     market_open=q.market_open,
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
+                    square_off_quantity=sq_off_qty,
+                    lots=lots_data,
                     price_error=None,
                 )
             )

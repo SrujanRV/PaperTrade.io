@@ -24,9 +24,22 @@ export function Header({
   useEffect(() => {
     function updateClock() {
       const now = new Date();
-      setCurrentTime(
-        now.toISOString().replace('T', ' ').substring(0, 19) + ' UTC'
-      );
+      try {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Kolkata',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+        const formatted = formatter.format(now).replace(',', '');
+        setCurrentTime(`${formatted} IST`);
+      } catch {
+        setCurrentTime(now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) + ' IST');
+      }
     }
     updateClock();
     const timer = setInterval(updateClock, 1000);

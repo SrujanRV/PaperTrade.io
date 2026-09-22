@@ -40,6 +40,17 @@ class BalanceResetRequest(BaseModel):
         return round(v, 2)
 
 
+class HoldingLotOut(BaseModel):
+    id: int
+    quantity: float
+    buy_price: float
+    square_off_date: date | None = None
+    is_intraday: bool = False
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class HoldingOut(BaseModel):
     """Holding row — plain, no live price (used by GET /api/wallet/{market})"""
     id: int
@@ -48,6 +59,8 @@ class HoldingOut(BaseModel):
     avg_buy_price: float
     square_off_date: date | None = None
     is_intraday: bool = False
+    square_off_quantity: float | None = None
+    lots: list[HoldingLotOut] = []
     last_updated: datetime
 
     model_config = {"from_attributes": True}
@@ -83,6 +96,8 @@ class HoldingWithPnLOut(BaseModel):
     market_open: bool
     square_off_date: date | None = None
     is_intraday: bool = False
+    square_off_quantity: float | None = None
+    lots: list[HoldingLotOut] = []
     price_error: str | None = None
 
 

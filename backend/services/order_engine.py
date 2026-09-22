@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from models.orm import Holding, Order, Transaction, Wallet
+from models.orm import Holding, HoldingLot, Order, Transaction, Wallet
 from services.price_feed import PriceQuote, get_quote
 from services.trading_calendar import calculate_square_off_date, is_near_market_close
 
@@ -141,11 +141,6 @@ def _execute_buy(
             (holding.quantity * holding.avg_buy_price + quantity * price) / new_qty, 6
         )
         holding.quantity = round(new_qty, 8)
-        if square_off_date:
-            # Preserve earlier square-off date if already set, else set new
-            if not holding.square_off_date or square_off_date < holding.square_off_date:
-                holding.square_off_date = square_off_date
-                holding.is_intraday = is_intraday
     else:
         holding = Holding(
             wallet_id=wallet.id,
@@ -156,6 +151,33 @@ def _execute_buy(
             is_intraday=is_intraday,
         )
         db.add(holding)
+        db.flush()
+
+    # Create new lot tracking this specific purchase and duration
+    lot = HoldingLot(
+        holding_id=holding.id,
+        quantity=round(quantity, 8),
+        buy_price=round(price, 6),
+        square_off_date=square_off_date,
+        is_intraday=is_intraday,
+        created_at=_now_utc(),
+    )
+    db.add(lot)
+    db.flush()
+
+    # Recompute earliest active square_off_date on the aggregated holding
+    active_timed_lots = (
+        db.query(HoldingLot)
+        .filter(HoldingLot.holding_id == holding.id, HoldingLot.square_off_date.isnot(None))
+        .order_by(HoldingLot.square_off_date.asc())
+        .all()
+    )
+    if active_timed_lots:
+        holding.square_off_date = active_timed_lots[0].square_off_date
+        holding.is_intraday = active_timed_lots[0].is_intraday
+    else:
+        holding.square_off_date = None
+        holding.is_intraday = False
 
     # Create or update order
     if existing_order:
@@ -253,6 +275,60 @@ def _execute_sell(
         db.delete(holding)
     else:
         holding.quantity = remaining
+
+        # Lot deduction
+        qty_to_deduct = quantity
+        if triggered_by == "auto_square_off":
+            # Auto square-off specifically consumes the due expiring lots
+            lots = (
+                db.query(HoldingLot)
+                .filter(HoldingLot.holding_id == holding.id, HoldingLot.square_off_date.isnot(None))
+                .order_by(HoldingLot.square_off_date.asc(), HoldingLot.created_at.asc())
+                .all()
+            )
+            fallback_lots = (
+                db.query(HoldingLot)
+                .filter(HoldingLot.holding_id == holding.id, HoldingLot.square_off_date.is_(None))
+                .order_by(HoldingLot.created_at.asc())
+                .all()
+            )
+            all_target_lots = lots + fallback_lots
+        else:
+            # Manual user sell: strictly FIFO ordered by created_at
+            all_target_lots = (
+                db.query(HoldingLot)
+                .filter(HoldingLot.holding_id == holding.id)
+                .order_by(HoldingLot.created_at.asc())
+                .all()
+            )
+
+        for lot in all_target_lots:
+            if qty_to_deduct <= 1e-9:
+                break
+            if lot.quantity <= qty_to_deduct + 1e-9:
+                qty_to_deduct = round(qty_to_deduct - lot.quantity, 8)
+                db.delete(lot)
+            else:
+                lot.quantity = round(lot.quantity - qty_to_deduct, 8)
+                qty_to_deduct = 0.0
+
+        db.flush()
+
+        # Recompute earliest active square_off_date from remaining lots (if lots exist)
+        has_any_lots = db.query(HoldingLot).filter(HoldingLot.holding_id == holding.id).count() > 0
+        if has_any_lots:
+            remaining_timed_lots = (
+                db.query(HoldingLot)
+                .filter(HoldingLot.holding_id == holding.id, HoldingLot.square_off_date.isnot(None))
+                .order_by(HoldingLot.square_off_date.asc())
+                .all()
+            )
+            if remaining_timed_lots:
+                holding.square_off_date = remaining_timed_lots[0].square_off_date
+                holding.is_intraday = remaining_timed_lots[0].is_intraday
+            else:
+                holding.square_off_date = None
+                holding.is_intraday = False
 
     # Create or update order
     if existing_order:
@@ -704,31 +780,81 @@ def evaluate_auto_square_off(
 
         wallets = db.query(Wallet).filter(Wallet.market == m).all()
         for wallet in wallets:
-            # Query holdings with a square_off_date that has arrived or passed
-            holdings = (
+            # Query holdings that have active lots due on or before today,
+            # plus any legacy holdings with square_off_date <= market_today without lots
+            holdings_with_lots = (
+                db.query(Holding)
+                .join(HoldingLot, Holding.id == HoldingLot.holding_id)
+                .filter(
+                    Holding.wallet_id == wallet.id,
+                    Holding.quantity > 0,
+                    HoldingLot.square_off_date.isnot(None),
+                    HoldingLot.square_off_date <= market_today,
+                )
+                .all()
+            )
+            legacy_holdings = (
                 db.query(Holding)
                 .filter(
                     Holding.wallet_id == wallet.id,
                     Holding.quantity > 0,
                     Holding.square_off_date.isnot(None),
                     Holding.square_off_date <= market_today,
+                    ~Holding.lots.any(),
                 )
                 .all()
             )
+            holdings = list({h.id: h for h in (holdings_with_lots + legacy_holdings)}.values())
 
             for h in holdings:
                 ticker = h.ticker.upper()
+
+                # Calculate quantity specifically belonging to due lots for this holding
+                due_lots = (
+                    db.query(HoldingLot)
+                    .filter(
+                        HoldingLot.holding_id == h.id,
+                        HoldingLot.square_off_date.isnot(None),
+                        HoldingLot.square_off_date <= market_today,
+                    )
+                    .all()
+                )
+                if due_lots:
+                    due_qty = round(sum(lot.quantity for lot in due_lots), 8)
+                elif not h.lots:
+                    # Legacy holding without lots
+                    due_qty = h.quantity
+                else:
+                    due_qty = 0.0
+                if due_qty <= 1e-9:
+                    # No lots due (or already sold); clear holding square_off_date if needed
+                    active_timed = (
+                        db.query(HoldingLot)
+                        .filter(HoldingLot.holding_id == h.id, HoldingLot.square_off_date.isnot(None))
+                        .order_by(HoldingLot.square_off_date.asc())
+                        .all()
+                    )
+                    if active_timed:
+                        h.square_off_date = active_timed[0].square_off_date
+                        h.is_intraday = active_timed[0].is_intraday
+                    else:
+                        h.square_off_date = None
+                        h.is_intraday = False
+                    db.commit()
+                    continue
+
+                qty_to_sell = min(due_qty, h.quantity)
+
                 quote = quote_map.get(ticker)
                 if not quote:
                     quote = get_quote(ticker)
                     quote_map[ticker] = quote
 
                 fill_price = quote.price if quote and quote.price > 0 else h.avg_buy_price
-                qty_to_sell = h.quantity
 
                 logger.info(
-                    "Auto square-off triggered for %s (%s) qty=%.4f @ %.4f (sq_off_date=%s, today=%s)",
-                    ticker, m, qty_to_sell, fill_price, h.square_off_date, market_today,
+                    "Auto square-off triggered for %s (%s) qty=%.4f (due_lots_qty=%.4f, total_holding=%.4f) @ %.4f (sq_off_date=%s, today=%s)",
+                    ticker, m, qty_to_sell, due_qty, h.quantity, fill_price, h.square_off_date, market_today,
                 )
 
                 sell_order = _execute_sell(

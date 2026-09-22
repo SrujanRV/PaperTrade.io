@@ -94,9 +94,42 @@ class Holding(Base):
     )
 
     wallet: Mapped[Wallet] = relationship("Wallet", back_populates="holdings")
+    lots: Mapped[list["HoldingLot"]] = relationship(
+        "HoldingLot",
+        back_populates="holding",
+        cascade="all, delete-orphan",
+        order_by="HoldingLot.created_at",
+    )
 
     def __repr__(self) -> str:
         return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} sq_off={self.square_off_date}>"
+
+
+# ── HoldingLot (Tranche-based position tracking) ──────────────────────────────
+
+class HoldingLot(Base):
+    """
+    Individual tranche or lot of shares within a Holding.
+    Tracks distinct purchase quantities, buy prices, and optional square-off expiry dates.
+    """
+    __tablename__ = "holding_lots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    holding_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False
+    )
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    buy_price: Mapped[float] = mapped_column(Float, nullable=False)
+    square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now_utc
+    )
+
+    holding: Mapped[Holding] = relationship("Holding", back_populates="lots")
+
+    def __repr__(self) -> str:
+        return f"<HoldingLot {self.id} qty={self.quantity} @ {self.buy_price} sq_off={self.square_off_date}>"
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────

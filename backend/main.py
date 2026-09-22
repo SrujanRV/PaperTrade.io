@@ -88,6 +88,16 @@ if "holdings" in _inspector.get_table_names():
             _conn.commit()
         logger.info("Migration applied: added 'is_intraday' column to holdings")
 
+if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.get_table_names():
+    with engine.connect() as _conn:
+        _conn.execute(text("""
+            INSERT INTO holding_lots (holding_id, quantity, buy_price, square_off_date, is_intraday, created_at)
+            SELECT h.id, h.quantity, h.avg_buy_price, h.square_off_date, h.is_intraday, h.last_updated
+            FROM holdings h
+            WHERE h.quantity > 0 AND NOT EXISTS (SELECT 1 FROM holding_lots l WHERE l.holding_id = h.id)
+        """))
+        _conn.commit()
+
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
