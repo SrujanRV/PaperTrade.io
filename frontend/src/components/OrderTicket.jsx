@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { placeOrder } from '../api/client';
+import { LivePriceChart } from './LivePriceChart';
 
 export function OrderTicket({
   ticker,
@@ -181,6 +182,13 @@ export function OrderTicket({
           </div>
         )}
       </div>
+
+      {/* Live Session Price Chart (Lightweight Charts) */}
+      <LivePriceChart
+        ticker={upper}
+        quote={quote}
+        currencySymbol={currencySymbol}
+      />
 
       {/* Filled Order State */}
       {filledOrder ? (
