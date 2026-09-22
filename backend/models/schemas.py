@@ -109,27 +109,44 @@ class OrderRequest(BaseModel):
     )
     side: Literal["buy", "sell"]
     quantity: float = Field(..., gt=0, description="Number of shares/units — must be > 0")
+    order_type: Literal["market", "limit", "stop_loss"] = Field(
+        default="market", description="Execution type: market, limit, or stop_loss"
+    )
+    requested_price: float | None = Field(
+        default=None, gt=0, description="Limit price for limit order, or trigger price for stop-loss"
+    )
+    trigger_price: float | None = Field(
+        default=None, gt=0, description="Trigger price for stop-loss order"
+    )
 
     @field_validator("ticker")
     @classmethod
     def upper_ticker(cls, v: str) -> str:
         return v.strip().upper()
 
+    @field_validator("requested_price", "trigger_price")
+    @classmethod
+    def round_prices(cls, v: float | None) -> float | None:
+        if v is not None:
+            return round(v, 4)
+        return v
+
 
 class OrderOut(BaseModel):
-    """Order record — returned for both filled and rejected orders"""
+    """Order record — returned for pending, filled, rejected, and cancelled orders"""
     id: int
     wallet_id: int
     ticker: str
     order_type: str
     side: str
     quantity: float
-    requested_price: float | None
-    executed_price: float | None
+    requested_price: float | None = None
+    trigger_price: float | None = None
+    executed_price: float | None = None
     status: str
-    reject_reason: str | None
+    reject_reason: str | None = None
     created_at: datetime
-    executed_at: datetime | None
+    executed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

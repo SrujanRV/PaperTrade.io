@@ -116,12 +116,13 @@ class Order(Base):
         Integer, ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False
     )
     ticker: Mapped[str] = mapped_column(String(20), nullable=False)
-    order_type: Mapped[str] = mapped_column(String(10), nullable=False, default="market")
+    order_type: Mapped[str] = mapped_column(String(20), nullable=False, default="market")
     side: Mapped[str] = mapped_column(String(4), nullable=False)            # "buy" | "sell"
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     requested_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trigger_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     executed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String(10), nullable=False)         # "filled" | "rejected"
+    status: Mapped[str] = mapped_column(String(20), nullable=False)         # "pending" | "filled" | "rejected" | "cancelled"
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc

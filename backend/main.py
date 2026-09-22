@@ -47,6 +47,14 @@ if "transactions" in _inspector.get_table_names():
             _conn.commit()
         logger.info("Migration applied: added 'avg_buy_price' column to transactions")
 
+if "orders" in _inspector.get_table_names():
+    _order_cols = {c["name"] for c in _inspector.get_columns("orders")}
+    if "trigger_price" not in _order_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE orders ADD COLUMN trigger_price FLOAT DEFAULT NULL"))
+            _conn.commit()
+        logger.info("Migration applied: added 'trigger_price' column to orders")
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="PaperTrade API",
@@ -64,21 +72,12 @@ app.add_middleware(
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
+from routers.orders import single_order_router
+
 app.include_router(prices_router)
 app.include_router(wallet_router)
 app.include_router(orders_router)
-
-from routers.orders import place_order
-from models.schemas import OrderOut
-app.add_api_route(
-    "/api/order",
-    place_order,
-    methods=["POST"],
-    response_model=OrderOut,
-    status_code=201,
-    tags=["orders"],
-    summary="Place order (alias for /api/orders)",
-)
+app.include_router(single_order_router)
 
 from fastapi.responses import RedirectResponse
 

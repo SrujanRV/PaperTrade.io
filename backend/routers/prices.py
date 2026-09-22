@@ -86,6 +86,18 @@ async def _price_event_generator(
         ticks = 0
         while not disconnected:
             quotes = get_quotes(symbols)
+
+            # Evaluate open pending orders against fresh incoming quotes
+            try:
+                from database import SessionLocal
+                from services.order_engine import evaluate_pending_orders
+                with SessionLocal() as db_session:
+                    triggered = evaluate_pending_orders(db_session, quotes=quotes)
+                    if triggered:
+                        logger.info("SSE tick cycle triggered %d pending order(s)", len(triggered))
+            except Exception as eval_exc:
+                logger.warning("Error evaluating pending orders in SSE cycle: %s", eval_exc)
+
             for q in quotes:
                 payload = {
                     "ticker": q.symbol,

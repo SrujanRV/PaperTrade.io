@@ -1,36 +1,30 @@
 """
-services/order_engine.py — Market order execution logic.
+services/order_engine.py — Order execution and tick evaluation engine.
 
-Responsibilities
-----------------
-1. Look up the wallet for the requested market.
-2. Validate the ticker's exchange matches the wallet's market.
-3. Fetch a live quote via price_feed and check market hours.
-4. Execute BUY or SELL atomically:
-   BUY:  deduct cash, upsert Holding with weighted-avg price, persist Order + Transaction
-   SELL: add proceeds, reduce Holding (delete if fully closed), persist Order + Transaction
-5. For any rejection: persist a rejected Order and return it (no other DB changes).
-
-All DB writes happen inside a single commit, so a mid-operation crash leaves no
-partial state — the order row is the last thing committed.
+Supports:
+- Market orders (BUY / SELL)
+- Limit orders (BUY: current_price <= limit, SELL: current_price >= limit)
+- Stop-Loss orders (SELL: current_price <= trigger, executed as market sell)
+- Evaluation against incoming price ticks during market open hours
+- Order cancellation for pending orders
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from models.orm import Holding, Order, Transaction, Wallet
-from services.price_feed import get_quote
+from services.price_feed import PriceQuote, get_quote
 
 logger = logging.getLogger(__name__)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# Which wallet market a ticker's exchange belongs to
 _EXCHANGE_MARKET: dict[str, str] = {
     "NSE":    "IN",
     "BSE":    "IN",
@@ -38,7 +32,6 @@ _EXCHANGE_MARKET: dict[str, str] = {
     "NASDAQ": "US",
 }
 
-# Suffix → exchange (mirrors config.py — kept local to avoid circular imports)
 _SUFFIX_EXCHANGE: dict[str, str] = {
     ".NS": "NSE",
     ".BO": "BSE",
@@ -56,7 +49,7 @@ def _ticker_exchange(ticker: str) -> str:
     for suffix, exchange in _SUFFIX_EXCHANGE.items():
         if upper.endswith(suffix):
             return exchange
-    return "NASDAQ"  # default for US tickers
+    return "NASDAQ"
 
 
 def _ticker_market(ticker: str) -> str:
@@ -70,22 +63,39 @@ def _persist_rejected(
     side: str,
     quantity: float,
     reject_reason: str,
+    order_type: str = "market",
+    requested_price: float | None = None,
+    trigger_price: float | None = None,
+    existing_order: Order | None = None,
 ) -> Order:
-    """Create and commit a rejected Order record, returning it."""
-    order = Order(
-        wallet_id=wallet_id,
-        ticker=ticker,
-        order_type="market",
-        side=side,
-        quantity=quantity,
-        status="rejected",
-        reject_reason=reject_reason,
-        created_at=_now_utc(),
-    )
-    db.add(order)
+    """Mark an existing order as rejected or create a new rejected Order row."""
+    if existing_order:
+        existing_order.status = "rejected"
+        existing_order.reject_reason = reject_reason
+        existing_order.executed_at = _now_utc()
+        order = existing_order
+    else:
+        order = Order(
+            wallet_id=wallet_id,
+            ticker=ticker,
+            order_type=order_type,
+            side=side,
+            quantity=quantity,
+            requested_price=requested_price,
+            trigger_price=trigger_price,
+            status="rejected",
+            reject_reason=reject_reason,
+            created_at=_now_utc(),
+            executed_at=_now_utc(),
+        )
+        db.add(order)
+
     db.commit()
     db.refresh(order)
-    logger.info("Order REJECTED: %s %s ×%s | reason=%s", side.upper(), ticker, quantity, reject_reason)
+    logger.info(
+        "Order REJECTED: %s %s %s ×%s | reason=%s",
+        order_type.upper(), side.upper(), ticker, quantity, reject_reason,
+    )
     return order
 
 
@@ -97,13 +107,19 @@ def _execute_buy(
     ticker: str,
     quantity: float,
     price: float,
+    order_type: str = "market",
+    requested_price: float | None = None,
+    trigger_price: float | None = None,
+    existing_order: Order | None = None,
 ) -> Order:
     total_cost = round(price * quantity, 2)
 
     # Cash check
     if wallet.current_cash_balance < total_cost:
         return _persist_rejected(
-            db, wallet.id, ticker, "buy", quantity, "insufficient_funds"
+            db, wallet.id, ticker, "buy", quantity, "insufficient_funds",
+            order_type=order_type, requested_price=requested_price,
+            trigger_price=trigger_price, existing_order=existing_order,
         )
 
     # Deduct cash
@@ -130,20 +146,29 @@ def _execute_buy(
         )
         db.add(holding)
 
-    # Create filled order
-    order = Order(
-        wallet_id=wallet.id,
-        ticker=ticker,
-        order_type="market",
-        side="buy",
-        quantity=quantity,
-        executed_price=price,
-        status="filled",
-        created_at=_now_utc(),
-        executed_at=_now_utc(),
-    )
-    db.add(order)
-    db.flush()  # get order.id before creating Transaction
+    # Create or update order
+    if existing_order:
+        existing_order.executed_price = price
+        existing_order.status = "filled"
+        existing_order.executed_at = _now_utc()
+        order = existing_order
+    else:
+        order = Order(
+            wallet_id=wallet.id,
+            ticker=ticker,
+            order_type=order_type,
+            side="buy",
+            quantity=quantity,
+            requested_price=requested_price,
+            trigger_price=trigger_price,
+            executed_price=price,
+            status="filled",
+            created_at=_now_utc(),
+            executed_at=_now_utc(),
+        )
+        db.add(order)
+
+    db.flush()
 
     # Ledger entry
     txn = Transaction(
@@ -163,8 +188,8 @@ def _execute_buy(
     db.refresh(order)
 
     logger.info(
-        "BUY filled: %s ×%s @ %.4f = %s %.2f | cash_after=%.2f",
-        ticker, quantity, price, wallet.currency, total_cost, wallet.current_cash_balance,
+        "%s BUY filled: %s ×%s @ %.4f = %s %.2f | cash_after=%.2f",
+        order_type.upper(), ticker, quantity, price, wallet.currency, total_cost, wallet.current_cash_balance,
     )
     return order
 
@@ -177,6 +202,10 @@ def _execute_sell(
     ticker: str,
     quantity: float,
     price: float,
+    order_type: str = "market",
+    requested_price: float | None = None,
+    trigger_price: float | None = None,
+    existing_order: Order | None = None,
 ) -> Order:
     holding = (
         db.query(Holding)
@@ -184,10 +213,12 @@ def _execute_sell(
         .first()
     )
 
-    # Holdings check (use small epsilon for float comparison)
+    # Holdings check
     if not holding or holding.quantity < quantity - 1e-9:
         return _persist_rejected(
-            db, wallet.id, ticker, "sell", quantity, "insufficient_holdings"
+            db, wallet.id, ticker, "sell", quantity, "insufficient_holdings",
+            order_type=order_type, requested_price=requested_price,
+            trigger_price=trigger_price, existing_order=existing_order,
         )
 
     proceeds = round(price * quantity, 2)
@@ -203,19 +234,28 @@ def _execute_sell(
     else:
         holding.quantity = remaining
 
-    # Create filled order
-    order = Order(
-        wallet_id=wallet.id,
-        ticker=ticker,
-        order_type="market",
-        side="sell",
-        quantity=quantity,
-        executed_price=price,
-        status="filled",
-        created_at=_now_utc(),
-        executed_at=_now_utc(),
-    )
-    db.add(order)
+    # Create or update order
+    if existing_order:
+        existing_order.executed_price = price
+        existing_order.status = "filled"
+        existing_order.executed_at = _now_utc()
+        order = existing_order
+    else:
+        order = Order(
+            wallet_id=wallet.id,
+            ticker=ticker,
+            order_type=order_type,
+            side="sell",
+            quantity=quantity,
+            requested_price=requested_price,
+            trigger_price=trigger_price,
+            executed_price=price,
+            status="filled",
+            created_at=_now_utc(),
+            executed_at=_now_utc(),
+        )
+        db.add(order)
+
     db.flush()
 
     # Ledger entry (realized_pnl stored at fill time)
@@ -237,43 +277,41 @@ def _execute_sell(
     db.refresh(order)
 
     logger.info(
-        "SELL filled: %s ×%s @ %.4f proceeds=%s %.2f realized_pnl=%.4f | cash_after=%.2f",
-        ticker, quantity, price, wallet.currency, proceeds,
+        "%s SELL filled: %s ×%s @ %.4f proceeds=%s %.2f realized_pnl=%.4f | cash_after=%.2f",
+        order_type.upper(), ticker, quantity, price, wallet.currency, proceeds,
         realized_pnl, wallet.current_cash_balance,
     )
     return order
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── Public API: Place Order ───────────────────────────────────────────────────
 
-def place_market_order(
+def place_order(
     db: Session,
     market: str,
     ticker: str,
     side: str,
     quantity: float,
+    order_type: str = "market",
+    requested_price: float | None = None,
+    trigger_price: float | None = None,
 ) -> Order:
     """
-    Place a market buy or sell order against the given wallet.
-
-    Validates (in order):
-      1. Wallet exists for the given market
-      2. Ticker's exchange matches the wallet's market
-      3. Quote is fetchable (valid ticker)
-      4. Exchange is currently open
-      5. Sufficient cash (buy) or holdings (sell)
-
-    Returns the Order ORM object (status = "filled" or "rejected").
-    Raises ValueError if the wallet doesn't exist (caller should handle as 404).
+    Unified entry point for placing market, limit, and stop-loss orders.
     """
     ticker = ticker.strip().upper()
+    side = side.strip().lower()
+    order_type = order_type.strip().lower()
+
+    if side not in ("buy", "sell"):
+        raise ValueError(f"Invalid side: {side!r} — must be 'buy' or 'sell'")
+    if order_type not in ("market", "limit", "stop_loss"):
+        raise ValueError(f"Invalid order_type: {order_type!r}")
 
     # ── Wallet lookup ──────────────────────────────────────────────────────────
     wallet = db.query(Wallet).filter(Wallet.market == market).first()
     if not wallet:
-        raise ValueError(
-            f"No wallet for market '{market}'. Call POST /api/wallet/setup first."
-        )
+        raise ValueError(f"No wallet for market '{market}'. Call POST /api/wallet/setup first.")
 
     # ── Ticker ↔ wallet market check ──────────────────────────────────────────
     if _ticker_market(ticker) != market:
@@ -283,24 +321,292 @@ def place_market_order(
             "Ticker %s (%s) sent to wrong wallet %s — should be %s",
             ticker, exchange, market, correct_market,
         )
-        return _persist_rejected(db, wallet.id, ticker, side, quantity, "wrong_market")
+        return _persist_rejected(
+            db, wallet.id, ticker, side, quantity, "wrong_market",
+            order_type=order_type, requested_price=requested_price, trigger_price=trigger_price,
+        )
 
-    # ── Fetch live quote ───────────────────────────────────────────────────────
+    # ── Fetch quote ───────────────────────────────────────────────────────────
     quote = get_quote(ticker, force_refresh=True)
     if quote.error:
         logger.warning("Invalid ticker %s: %s", ticker, quote.error)
-        return _persist_rejected(db, wallet.id, ticker, side, quantity, "invalid_ticker")
+        return _persist_rejected(
+            db, wallet.id, ticker, side, quantity, "invalid_ticker",
+            order_type=order_type, requested_price=requested_price, trigger_price=trigger_price,
+        )
 
-    # ── Market-hours check ─────────────────────────────────────────────────────
-    if not quote.market_open:
-        return _persist_rejected(db, wallet.id, ticker, side, quantity, "market_closed")
+    # ── 1. MARKET ORDER ───────────────────────────────────────────────────────
+    if order_type == "market":
+        if not quote.market_open:
+            return _persist_rejected(
+                db, wallet.id, ticker, side, quantity, "market_closed",
+                order_type="market",
+            )
+        if side == "buy":
+            return _execute_buy(db, wallet, ticker, quantity, quote.price, order_type="market")
+        else:
+            return _execute_sell(db, wallet, ticker, quantity, quote.price, order_type="market")
 
-    price = quote.price
+    # ── 2. LIMIT ORDER ────────────────────────────────────────────────────────
+    if order_type == "limit":
+        limit_price = requested_price
+        if not limit_price or limit_price <= 0:
+            return _persist_rejected(
+                db, wallet.id, ticker, side, quantity, "invalid_limit_price",
+                order_type="limit", requested_price=limit_price,
+            )
 
-    # ── Route to buy / sell ────────────────────────────────────────────────────
-    if side == "buy":
-        return _execute_buy(db, wallet, ticker, quantity, price)
-    elif side == "sell":
-        return _execute_sell(db, wallet, ticker, quantity, price)
-    else:
-        raise ValueError(f"Invalid side: {side!r} — must be 'buy' or 'sell'")
+        # Pre-execution sanity checks
+        if side == "buy":
+            cost = round(limit_price * quantity, 2)
+            if wallet.current_cash_balance < cost:
+                return _persist_rejected(
+                    db, wallet.id, ticker, side, quantity, "insufficient_funds",
+                    order_type="limit", requested_price=limit_price,
+                )
+            # If market is OPEN and price is currently favorable (current <= limit), fill immediately!
+            if quote.market_open and quote.price <= limit_price:
+                return _execute_buy(
+                    db, wallet, ticker, quantity, quote.price,
+                    order_type="limit", requested_price=limit_price,
+                )
+        else:
+            holding = (
+                db.query(Holding)
+                .filter(Holding.wallet_id == wallet.id, Holding.ticker == ticker)
+                .first()
+            )
+            if not holding or holding.quantity < quantity - 1e-9:
+                return _persist_rejected(
+                    db, wallet.id, ticker, side, quantity, "insufficient_holdings",
+                    order_type="limit", requested_price=limit_price,
+                )
+            # If market is OPEN and price is currently favorable (current >= limit), fill immediately!
+            if quote.market_open and quote.price >= limit_price:
+                return _execute_sell(
+                    db, wallet, ticker, quantity, quote.price,
+                    order_type="limit", requested_price=limit_price,
+                )
+
+        # Otherwise, save as pending
+        pending_order = Order(
+            wallet_id=wallet.id,
+            ticker=ticker,
+            order_type="limit",
+            side=side,
+            quantity=quantity,
+            requested_price=limit_price,
+            status="pending",
+            created_at=_now_utc(),
+        )
+        db.add(pending_order)
+        db.commit()
+        db.refresh(pending_order)
+        logger.info(
+            "LIMIT %s pending: %s ×%s limit=%.4f (current=%.4f, market_open=%s)",
+            side.upper(), ticker, quantity, limit_price, quote.price, quote.market_open,
+        )
+        return pending_order
+
+    # ── 3. STOP-LOSS ORDER ────────────────────────────────────────────────────
+    if order_type == "stop_loss":
+        # Stop-loss is only available for sell side to protect downside
+        if side != "sell":
+            return _persist_rejected(
+                db, wallet.id, ticker, side, quantity, "stop_loss_sell_only",
+                order_type="stop_loss", trigger_price=trigger_price or requested_price,
+            )
+
+        stop_trigger = trigger_price if trigger_price is not None else requested_price
+        if not stop_trigger or stop_trigger <= 0:
+            return _persist_rejected(
+                db, wallet.id, ticker, side, quantity, "invalid_trigger_price",
+                order_type="stop_loss", trigger_price=stop_trigger,
+            )
+
+        holding = (
+            db.query(Holding)
+            .filter(Holding.wallet_id == wallet.id, Holding.ticker == ticker)
+            .first()
+        )
+        if not holding or holding.quantity < quantity - 1e-9:
+            return _persist_rejected(
+                db, wallet.id, ticker, side, quantity, "insufficient_holdings",
+                order_type="stop_loss", trigger_price=stop_trigger,
+                requested_price=stop_trigger,
+            )
+
+        # If market is OPEN and price has already breached trigger (current <= trigger), execute market sell immediately!
+        if quote.market_open and quote.price <= stop_trigger:
+            return _execute_sell(
+                db, wallet, ticker, quantity, quote.price,
+                order_type="stop_loss", requested_price=stop_trigger,
+                trigger_price=stop_trigger,
+            )
+
+        # Otherwise, save as pending stop-loss
+        pending_order = Order(
+            wallet_id=wallet.id,
+            ticker=ticker,
+            order_type="stop_loss",
+            side="sell",
+            quantity=quantity,
+            requested_price=stop_trigger,
+            trigger_price=stop_trigger,
+            status="pending",
+            created_at=_now_utc(),
+        )
+        db.add(pending_order)
+        db.commit()
+        db.refresh(pending_order)
+        logger.info(
+            "STOP-LOSS SELL pending: %s ×%s trigger=%.4f (current=%.4f, market_open=%s)",
+            ticker, quantity, stop_trigger, quote.price, quote.market_open,
+        )
+        return pending_order
+
+    raise ValueError(f"Unhandled order_type: {order_type}")
+
+
+def place_market_order(
+    db: Session,
+    market: str,
+    ticker: str,
+    side: str,
+    quantity: float,
+) -> Order:
+    """Backward-compatible helper for market orders."""
+    return place_order(db=db, market=market, ticker=ticker, side=side, quantity=quantity, order_type="market")
+
+
+# ── Tick Evaluation: Process Open Pending Orders ──────────────────────────────
+
+def evaluate_pending_orders(
+    db: Session,
+    quotes: list[PriceQuote] | dict[str, PriceQuote] | None = None,
+    market: str | None = None,
+) -> list[Order]:
+    """
+    Evaluates open 'pending' orders against incoming market quotes.
+
+    CRITICAL RULE (per user spec):
+    When a stop-loss or limit order triggers based on price, it MUST still respect
+    the market_open check before actually filling. If the market is closed, DO NOT
+    fill it; leave it pending until the market is next open.
+    """
+    query = db.query(Order).filter(Order.status == "pending")
+    if market:
+        query = query.join(Wallet, Order.wallet_id == Wallet.id).filter(Wallet.market == market)
+
+    pending_orders = query.all()
+    if not pending_orders:
+        return []
+
+    # Map quotes for fast lookup
+    quote_map: dict[str, PriceQuote] = {}
+    if quotes:
+        if isinstance(quotes, dict):
+            quote_map = {k.upper(): v for k, v in quotes.items()}
+        elif isinstance(quotes, list):
+            quote_map = {q.symbol.upper(): q for q in quotes}
+
+    filled_or_rejected: list[Order] = []
+
+    for order in pending_orders:
+        ticker = order.ticker.upper()
+        quote = quote_map.get(ticker)
+        if not quote:
+            quote = get_quote(ticker)
+            quote_map[ticker] = quote
+
+        if not quote or quote.error:
+            continue
+
+        # ── 1. Market Hours Check (MUST BE OPEN TO FILL) ─────────────────────
+        if not quote.market_open:
+            # Leave pending!
+            continue
+
+        current_price = quote.price
+        triggered = False
+
+        # ── 2. Trigger Evaluation ────────────────────────────────────────────
+        if order.order_type == "limit":
+            limit_p = order.requested_price
+            if limit_p is not None:
+                if order.side == "buy" and current_price <= limit_p:
+                    triggered = True
+                elif order.side == "sell" and current_price >= limit_p:
+                    triggered = True
+
+        elif order.order_type == "stop_loss":
+            trigger_p = order.trigger_price if order.trigger_price is not None else order.requested_price
+            if trigger_p is not None:
+                # Stop loss sell triggers when price drops to or below trigger price
+                if order.side == "sell" and current_price <= trigger_p:
+                    triggered = True
+
+        # ── 3. Execution on Trigger ──────────────────────────────────────────
+        if triggered:
+            wallet = db.query(Wallet).filter(Wallet.id == order.wallet_id).first()
+            if not wallet:
+                continue
+
+            logger.info(
+                "Trigger condition met for pending order #%d (%s %s %s @ current %.4f)",
+                order.id, order.order_type.upper(), order.side.upper(), order.ticker, current_price,
+            )
+
+            if order.side == "buy":
+                result = _execute_buy(
+                    db=db,
+                    wallet=wallet,
+                    ticker=order.ticker,
+                    quantity=order.quantity,
+                    price=current_price,
+                    order_type=order.order_type,
+                    requested_price=order.requested_price,
+                    trigger_price=order.trigger_price,
+                    existing_order=order,
+                )
+            else:
+                result = _execute_sell(
+                    db=db,
+                    wallet=wallet,
+                    ticker=order.ticker,
+                    quantity=order.quantity,
+                    price=current_price,
+                    order_type=order.order_type,
+                    requested_price=order.requested_price,
+                    trigger_price=order.trigger_price,
+                    existing_order=order,
+                )
+
+            filled_or_rejected.append(result)
+
+    return filled_or_rejected
+
+
+# ── Order Cancellation ────────────────────────────────────────────────────────
+
+def cancel_pending_order(db: Session, order_id: int) -> Order:
+    """
+    Cancels an open order. Only orders with status='pending' may be cancelled.
+    Raises KeyError if not found, or ValueError if order is not pending.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise KeyError(f"Order #{order_id} not found.")
+
+    if order.status != "pending":
+        raise ValueError(
+            f"Cannot cancel order #{order_id} — current status is '{order.status}' (only 'pending' orders can be cancelled)."
+        )
+
+    order.status = "cancelled"
+    order.executed_at = _now_utc()
+    db.commit()
+    db.refresh(order)
+
+    logger.info("Order #%d CANCELLED by user (%s %s %s)", order.id, order.order_type, order.side, order.ticker)
+    return order

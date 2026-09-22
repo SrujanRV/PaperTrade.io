@@ -10,7 +10,15 @@ function formatMoney(amount, currency) {
   });
 }
 
-export function Header({ inWallet, usWallet, onOpenWalletSetup, onOpenSettings }) {
+export function Header({
+  inWallet,
+  usWallet,
+  pendingCount = 0,
+  newFillsCount = 0,
+  onNavigateToHistory,
+  onOpenWalletSetup,
+  onOpenSettings,
+}) {
   const [currentTime, setCurrentTime] = useState('');
 
   useEffect(() => {
@@ -41,8 +49,31 @@ export function Header({ inWallet, usWallet, onOpenWalletSetup, onOpenSettings }
         </span>
       </div>
 
-      {/* Center/Right: Dual Wallet Balance Badges */}
-      <div className="flex items-center space-x-4">
+      {/* Center/Right: Notification Pills + Dual Wallet Balance Badges */}
+      <div className="flex items-center space-x-3 sm:space-x-4">
+        {/* Fill Notification Pill */}
+        {newFillsCount > 0 && (
+          <button
+            type="button"
+            onClick={onNavigateToHistory}
+            title="View newly executed orders"
+            className="flex items-center space-x-1.5 px-2.5 py-1 bg-green/15 border border-green/50 text-green hover:bg-green/25 text-[11px] font-mono-tabular font-bold uppercase tracking-wider transition-colors animate-pulse"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-green" />
+            <span>{newFillsCount} ORDER{newFillsCount > 1 ? 'S' : ''} FILLED</span>
+          </button>
+        )}
+
+        {/* Pending Orders Pill */}
+        {pendingCount > 0 && newFillsCount === 0 && (
+          <div
+            title="Open pending limit/stop orders waiting for trigger"
+            className="hidden sm:flex items-center space-x-1.5 px-2 py-1 bg-accent/10 border border-accent/40 text-accent text-[11px] font-mono-tabular font-medium uppercase tracking-wider"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+            <span>{pendingCount} PENDING</span>
+          </div>
+        )}
         {/* Indian Market Wallet */}
         <div className="flex items-center space-x-2 px-2.5 py-1 bg-surface border border-border">
           <span className="text-[10px] font-mono-tabular uppercase text-text-muted font-medium">

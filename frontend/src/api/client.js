@@ -45,20 +45,57 @@ export async function setupWallet(market, startingBalance) {
   return await res.json();
 }
 
-export async function placeOrder({ market, ticker, side, quantity }) {
+export async function placeOrder({
+  market,
+  ticker,
+  side,
+  quantity,
+  order_type = 'market',
+  requested_price = null,
+  trigger_price = null,
+}) {
+  const payload = {
+    market,
+    ticker,
+    side,
+    quantity: Number(quantity),
+    order_type,
+  };
+  if (requested_price !== null && requested_price !== undefined && requested_price !== '') {
+    payload.requested_price = Number(requested_price);
+  }
+  if (trigger_price !== null && trigger_price !== undefined && trigger_price !== '') {
+    payload.trigger_price = Number(trigger_price);
+  }
+
   const res = await fetch('/api/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      market,
-      ticker,
-      side,
-      quantity: Number(quantity),
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || `Order placement failed`);
+  }
+  return await res.json();
+}
+
+export async function fetchPendingOrders(market) {
+  const res = await fetch(`/api/orders/${market}/pending`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`Failed to fetch pending orders for ${market}: ${res.statusText}`);
+  }
+  return await res.json();
+}
+
+export async function cancelPendingOrder(orderId) {
+  const res = await fetch(`/api/order/${orderId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to cancel order #${orderId}`);
   }
   return await res.json();
 }

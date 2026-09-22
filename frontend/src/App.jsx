@@ -7,7 +7,7 @@ import { TradeLog } from './components/TradeLog';
 import { OrderTicket } from './components/OrderTicket';
 import { WalletSetupModal } from './components/WalletSetupModal';
 import { SettingsModal } from './components/SettingsModal';
-import { fetchWallet } from './api/client';
+import { fetchWallet, fetchPendingOrders, fetchOrders } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
 
 const LEGACY_STORAGE_KEY = 'papertrade_watchlist';
@@ -196,6 +196,53 @@ export default function App() {
     }
   }, []);
 
+  // Pending orders tracking & fill notifications
+  const [pendingOrders, setPendingOrders] = useState([]);
+  const [newFills, setNewFills] = useState([]);
+
+  const checkPendingOrders = useCallback(async () => {
+    try {
+      const [inPending, usPending] = await Promise.all([
+        fetchPendingOrders('IN').catch(() => []),
+        fetchPendingOrders('US').catch(() => []),
+      ]);
+      const currentPending = [...(inPending || []), ...(usPending || [])];
+
+      setPendingOrders((prevPending) => {
+        if (prevPending.length > 0) {
+          const currentIds = new Set(currentPending.map((o) => o.id));
+          const missing = prevPending.filter((o) => !currentIds.has(o.id));
+          if (missing.length > 0) {
+            Promise.all([
+              fetchOrders('IN').catch(() => []),
+              fetchOrders('US').catch(() => []),
+            ]).then(([inAll, usAll]) => {
+              const allOrders = [...(inAll || []), ...(usAll || [])];
+              const newlyFilled = missing
+                .map((m) => allOrders.find((o) => o.id === m.id))
+                .filter((o) => o && o.status === 'filled');
+
+              if (newlyFilled.length > 0) {
+                setNewFills((prev) => [...prev, ...newlyFilled]);
+                refreshWallets();
+                setRefreshKey((k) => k + 1);
+              }
+            });
+          }
+        }
+        return currentPending;
+      });
+    } catch (e) {
+      // Non-critical background polling
+    }
+  }, [refreshWallets]);
+
+  useEffect(() => {
+    checkPendingOrders();
+    const interval = setInterval(checkPendingOrders, 5000);
+    return () => clearInterval(interval);
+  }, [checkPendingOrders, refreshKey]);
+
   useEffect(() => {
     refreshWallets();
   }, [refreshWallets]);
@@ -221,6 +268,7 @@ export default function App() {
 
   function handleOrderExecuted() {
     refreshWallets();
+    checkPendingOrders();
     setRefreshKey((k) => k + 1);
   }
 
@@ -228,10 +276,16 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-base text-text-primary flex flex-col font-sans selection:bg-accent/30 selection:text-white">
-      {/* Persistent Terminal Header with Wallets */}
+      {/* Persistent Terminal Header with Wallets & Notifications */}
       <Header
         inWallet={inWallet}
         usWallet={usWallet}
+        pendingCount={pendingOrders.length}
+        newFillsCount={newFills.length}
+        onNavigateToHistory={() => {
+          setActiveTab('history');
+          setNewFills([]);
+        }}
         onOpenWalletSetup={handleOpenWalletSetup}
         onOpenSettings={() => setShowSettingsModal(true)}
       />
@@ -263,14 +317,26 @@ export default function App() {
               Portfolio & Positions
             </button>
             <button
-              onClick={() => setActiveTab('history')}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              onClick={() => {
+                setActiveTab('history');
+                setNewFills([]);
+              }}
+              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors flex items-center space-x-1.5 ${
                 activeTab === 'history'
                   ? 'bg-[#232731] text-text-primary'
                   : 'text-text-muted hover:text-text-primary'
               }`}
             >
-              Order History
+              <span>Order History</span>
+              {newFills.length > 0 ? (
+                <span className="px-1.5 py-0.2 text-[9px] bg-green text-black font-bold font-mono-tabular animate-pulse">
+                  {newFills.length} NEW
+                </span>
+              ) : pendingOrders.length > 0 ? (
+                <span className="px-1.5 py-0.2 text-[9px] bg-accent/20 text-accent font-semibold font-mono-tabular">
+                  {pendingOrders.length}
+                </span>
+              ) : null}
             </button>
             <button
               onClick={() => setActiveTab('trades')}
@@ -326,6 +392,7 @@ export default function App() {
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
                 onOpenWalletSetup={handleOpenWalletSetup}
+                onOrderUpdated={handleOrderExecuted}
                 refreshKey={refreshKey}
               />
             )}

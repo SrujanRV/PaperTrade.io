@@ -11,19 +11,35 @@ export function OrderTicket({
   onOrderExecuted,
   onOpenWalletSetup,
 }) {
+  const [orderType, setOrderType] = useState('market'); // 'market' | 'limit' | 'stop_loss'
   const [side, setSide] = useState('buy'); // 'buy' | 'sell'
   const [quantity, setQuantity] = useState(1);
+  const [limitPrice, setLimitPrice] = useState('');
+  const [triggerPrice, setTriggerPrice] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
-  const [filledOrder, setFilledOrder] = useState(null);
+  const [completedOrder, setCompletedOrder] = useState(null);
 
   // Reset state when ticker changes
   useEffect(() => {
+    setOrderType('market');
     setSide('buy');
     setQuantity(1);
+    setLimitPrice(quote?.current_price ? String(quote.current_price) : '');
+    setTriggerPrice(quote?.current_price ? String(Number((quote.current_price * 0.95).toFixed(2))) : '');
     setErrorMsg(null);
-    setFilledOrder(null);
+    setCompletedOrder(null);
   }, [ticker]);
+
+  // Initialize prices when quote first arrives if not already set
+  useEffect(() => {
+    if (quote?.current_price) {
+      setLimitPrice((prev) => (prev ? prev : String(quote.current_price)));
+      setTriggerPrice((prev) =>
+        prev ? prev : String(Number((quote.current_price * 0.95).toFixed(2)))
+      );
+    }
+  }, [quote?.current_price]);
 
   if (!ticker) return null;
 
@@ -36,7 +52,16 @@ export function OrderTicket({
 
   const price = quote?.current_price ?? 0;
   const isMarketOpen = quote?.market_status === 'open';
-  const totalCost = Number((price * (Number(quantity) || 0)).toFixed(2));
+
+  // Effective price for calculation
+  const effectivePrice =
+    orderType === 'limit' && Number(limitPrice) > 0
+      ? Number(limitPrice)
+      : orderType === 'stop_loss' && Number(triggerPrice) > 0
+      ? Number(triggerPrice)
+      : price;
+
+  const totalCost = Number((effectivePrice * (Number(quantity) || 0)).toFixed(2));
   const cashBalance = wallet?.current_cash_balance ?? 0;
 
   // Check available holding if selling
@@ -52,7 +77,7 @@ export function OrderTicket({
   async function handleOrderSubmit(e) {
     e.preventDefault();
     setErrorMsg(null);
-    setFilledOrder(null);
+    setCompletedOrder(null);
 
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
@@ -60,14 +85,34 @@ export function OrderTicket({
       return;
     }
 
-    if (!isMarketOpen) {
-      setErrorMsg('Market is currently closed. Orders cannot be submitted.');
+    if (orderType === 'market' && !isMarketOpen) {
+      setErrorMsg('Market is currently closed. Market orders require regular market hours.');
       return;
+    }
+
+    if (orderType === 'limit') {
+      const lp = Number(limitPrice);
+      if (!lp || lp <= 0) {
+        setErrorMsg('Please enter a valid limit price greater than zero.');
+        return;
+      }
+    }
+
+    if (orderType === 'stop_loss') {
+      if (side !== 'sell') {
+        setErrorMsg('Stop-loss orders are sell-only to protect existing positions.');
+        return;
+      }
+      const tp = Number(triggerPrice);
+      if (!tp || tp <= 0) {
+        setErrorMsg('Please enter a valid trigger price greater than zero.');
+        return;
+      }
     }
 
     if (hasInsufficientFunds) {
       setErrorMsg(
-        `Insufficient funds. Order total is ${currencySymbol}${totalCost.toLocaleString()} but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
+        `Insufficient funds. Estimated total is ${currencySymbol}${totalCost.toLocaleString()} but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
       );
       return;
     }
@@ -87,10 +132,13 @@ export function OrderTicket({
         ticker: upper,
         side,
         quantity: qty,
+        order_type: orderType,
+        requested_price: orderType === 'limit' ? Number(limitPrice) : orderType === 'stop_loss' ? Number(triggerPrice) : null,
+        trigger_price: orderType === 'stop_loss' ? Number(triggerPrice) : null,
       });
 
-      if (order.status === 'filled') {
-        setFilledOrder(order);
+      if (order.status === 'filled' || order.status === 'pending') {
+        setCompletedOrder(order);
         if (onOrderExecuted) {
           onOrderExecuted(order);
         }
@@ -102,6 +150,9 @@ export function OrderTicket({
           insufficient_holdings: `Insufficient holdings. You do not hold enough shares of ${upper} to sell.`,
           invalid_ticker: `Invalid ticker symbol. Unable to fetch executable quote from exchange.`,
           wrong_market: `Ticker / wallet mismatch.`,
+          stop_loss_sell_only: `Stop-loss orders can only be placed on the SELL side.`,
+          invalid_limit_price: `Invalid limit price specified.`,
+          invalid_trigger_price: `Invalid trigger price specified.`,
         };
         setErrorMsg(
           reasons[order.reject_reason] ||
@@ -239,41 +290,74 @@ export function OrderTicket({
             </button>
           </div>
         </div>
-      ) : filledOrder ? (
+      ) : completedOrder ? (
         <div className="p-5 text-center space-y-4 font-mono-tabular">
-          <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
-            <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
-            <span>
-              ORDER FILLED @ {currencySymbol}
-              {Number(filledOrder.executed_price).toFixed(2)}
-            </span>
-          </div>
+          {completedOrder.status === 'filled' ? (
+            <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
+              <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
+              <span>
+                ORDER FILLED @ {currencySymbol}
+                {Number(completedOrder.executed_price).toFixed(2)}
+              </span>
+            </div>
+          ) : (
+            <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-accent uppercase">
+              <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_6px_rgba(59,130,246,0.6)] animate-pulse" />
+              <span>PENDING ORDER CREATED</span>
+            </div>
+          )}
+
           <div>
             <p className="text-[11px] text-text-muted">
-              {filledOrder.side.toUpperCase()} {filledOrder.quantity} {upper}
+              {completedOrder.order_type.toUpperCase()} {completedOrder.side.toUpperCase()} {completedOrder.quantity} {upper}
             </p>
           </div>
 
           <div className="p-3 bg-base border border-border text-left text-xs space-y-1">
             <div className="flex justify-between text-text-muted">
               <span>ORDER ID:</span>
-              <span className="text-text-primary">#{filledOrder.id}</span>
+              <span className="text-text-primary">#{completedOrder.id}</span>
             </div>
             <div className="flex justify-between text-text-muted">
               <span>STATUS:</span>
-              <span className="text-green uppercase font-semibold">FILLED</span>
-            </div>
-            <div className="flex justify-between text-text-muted">
-              <span>TOTAL:</span>
-              <span className="text-text-primary">
-                {currencySymbol}
-                {(filledOrder.executed_price * filledOrder.quantity).toFixed(2)}
+              <span
+                className={`uppercase font-semibold ${
+                  completedOrder.status === 'filled' ? 'text-green' : 'text-accent'
+                }`}
+              >
+                {completedOrder.status === 'filled' ? 'FILLED' : 'PENDING TRIGGER'}
               </span>
             </div>
+            {completedOrder.status === 'filled' ? (
+              <div className="flex justify-between text-text-muted">
+                <span>TOTAL:</span>
+                <span className="text-text-primary">
+                  {currencySymbol}
+                  {(completedOrder.executed_price * completedOrder.quantity).toFixed(2)}
+                </span>
+              </div>
+            ) : (
+              <div className="flex justify-between text-text-muted">
+                <span>TARGET:</span>
+                <span className="text-text-primary font-semibold">
+                  {completedOrder.order_type === 'limit'
+                    ? completedOrder.side === 'buy'
+                      ? `≤ ${currencySymbol}${Number(completedOrder.requested_price).toFixed(2)}`
+                      : `≥ ${currencySymbol}${Number(completedOrder.requested_price).toFixed(2)}`
+                    : `≤ ${currencySymbol}${Number(completedOrder.trigger_price).toFixed(2)}`}
+                </span>
+              </div>
+            )}
           </div>
 
+          {completedOrder.status === 'pending' && (
+            <p className="text-[10px] text-text-muted leading-tight">
+              Order will trigger and execute against live price ticks when regular market hours are open.
+            </p>
+          )}
+
           <button
-            onClick={() => setFilledOrder(null)}
+            onClick={() => setCompletedOrder(null)}
             className="w-full h-8 bg-surface-hover hover:bg-border text-xs text-text-primary uppercase tracking-wider font-semibold transition-colors"
           >
             PLACE ANOTHER ORDER
@@ -293,16 +377,55 @@ export function OrderTicket({
             </div>
           )}
 
+          {/* Order Type Segmented Control */}
+          <div>
+            <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1 font-mono-tabular">
+              ORDER TYPE
+            </div>
+            <div className="grid grid-cols-3 gap-1 p-1 bg-base border border-border">
+              {[
+                { id: 'market', label: 'MARKET' },
+                { id: 'limit', label: 'LIMIT' },
+                { id: 'stop_loss', label: 'STOP-LOSS' },
+              ].map((t) => {
+                const active = orderType === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setOrderType(t.id);
+                      setErrorMsg(null);
+                      if (t.id === 'stop_loss') {
+                        setSide('sell');
+                      }
+                    }}
+                    className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                      active
+                        ? 'bg-border text-text-primary'
+                        : 'text-text-muted hover:text-text-primary'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Buy / Sell Segmented Control */}
           <div className="grid grid-cols-2 gap-1 p-1 bg-base border border-border">
             <button
               type="button"
+              disabled={orderType === 'stop_loss'}
               onClick={() => {
                 setSide('buy');
                 setErrorMsg(null);
               }}
               className={`h-8 text-xs font-semibold tracking-wider uppercase transition-colors ${
-                side === 'buy'
+                orderType === 'stop_loss'
+                  ? 'opacity-30 cursor-not-allowed text-text-muted'
+                  : side === 'buy'
                   ? 'bg-green text-black'
                   : 'text-text-muted hover:text-text-primary'
               }`}
@@ -324,6 +447,52 @@ export function OrderTicket({
               SELL
             </button>
           </div>
+
+          {/* Limit Price Input */}
+          {orderType === 'limit' && (
+            <div className="font-mono-tabular">
+              <div className="flex justify-between items-center text-[11px] text-text-muted mb-1.5">
+                <label className="uppercase tracking-wider">
+                  LIMIT PRICE ({currencySymbol})
+                </label>
+                <span className="text-[10px]">
+                  {side === 'buy' ? 'Fill if price ≤' : 'Fill if price ≥'}
+                </span>
+              </div>
+              <input
+                type="number"
+                step="any"
+                required
+                value={limitPrice}
+                onChange={(e) => setLimitPrice(e.target.value)}
+                className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder={price ? price.toFixed(2) : '0.00'}
+              />
+            </div>
+          )}
+
+          {/* Trigger Price Input for Stop-Loss */}
+          {orderType === 'stop_loss' && (
+            <div className="font-mono-tabular">
+              <div className="flex justify-between items-center text-[11px] text-text-muted mb-1.5">
+                <label className="uppercase tracking-wider">
+                  STOP TRIGGER PRICE ({currencySymbol})
+                </label>
+                <span className="text-[10px] text-accent">
+                  Triggers sell if price ≤
+                </span>
+              </div>
+              <input
+                type="number"
+                step="any"
+                required
+                value={triggerPrice}
+                onChange={(e) => setTriggerPrice(e.target.value)}
+                className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder={price ? (price * 0.95).toFixed(2) : '0.00'}
+              />
+            </div>
+          )}
 
           {/* Quantity Input */}
           <div className="font-mono-tabular">
@@ -366,17 +535,25 @@ export function OrderTicket({
           <div className="p-3 bg-base border border-border space-y-1.5 text-xs font-mono-tabular">
             <div className="flex justify-between text-text-muted">
               <span>ORDER TYPE:</span>
-              <span className="text-text-primary font-medium">MARKET</span>
+              <span className="text-text-primary font-medium uppercase">{orderType.replace('_', '-')}</span>
             </div>
             <div className="flex justify-between text-text-muted">
-              <span>UNIT PRICE:</span>
+              <span>
+                {orderType === 'limit'
+                  ? 'LIMIT PRICE:'
+                  : orderType === 'stop_loss'
+                  ? 'TRIGGER PRICE:'
+                  : 'CURRENT PRICE:'}
+              </span>
               <span className="text-text-primary">
                 {currencySymbol}
-                {price.toFixed(2)}
+                {effectivePrice.toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between text-text-muted border-t border-border/60 pt-1.5">
-              <span className="font-medium text-text-primary">EST. TOTAL:</span>
+              <span className="font-medium text-text-primary">
+                {side === 'buy' ? 'EST. TOTAL COST:' : 'EST. PROCEEDS:'}
+              </span>
               <span className="font-semibold text-text-primary">
                 {currencySymbol}
                 {totalCost.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
@@ -385,24 +562,33 @@ export function OrderTicket({
                 })}
               </span>
             </div>
-            <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
-              <span>AVAILABLE CASH:</span>
-              <span className={hasInsufficientFunds ? 'text-red font-medium' : 'text-text-primary font-medium'}>
-                {currencySymbol}
-                {cashBalance.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-            </div>
+            {side === 'buy' && (
+              <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
+                <span>AVAILABLE CASH:</span>
+                <span className={hasInsufficientFunds ? 'text-red font-medium' : 'text-text-primary font-medium'}>
+                  {currencySymbol}
+                  {cashBalance.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={submitting || !isMarketOpen || hasInsufficientFunds || hasInsufficientHoldings}
+            disabled={
+              submitting ||
+              (orderType === 'market' && !isMarketOpen) ||
+              hasInsufficientFunds ||
+              hasInsufficientHoldings
+            }
             className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none ${
-              !isMarketOpen
+              orderType === 'market' && !isMarketOpen
+                ? 'bg-border text-text-muted cursor-not-allowed'
+                : hasInsufficientFunds || hasInsufficientHoldings
                 ? 'bg-border text-text-muted cursor-not-allowed'
                 : side === 'buy'
                 ? 'bg-green hover:bg-green/90 text-black disabled:opacity-50 disabled:cursor-not-allowed'
@@ -411,13 +597,17 @@ export function OrderTicket({
           >
             {submitting
               ? 'TRANSMITTING ORDER...'
-              : !isMarketOpen
+              : orderType === 'market' && !isMarketOpen
               ? 'MARKET CLOSED'
               : hasInsufficientFunds
               ? 'INSUFFICIENT FUNDS'
               : hasInsufficientHoldings
               ? 'INSUFFICIENT HOLDINGS'
-              : `${side.toUpperCase()} ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`}
+              : orderType === 'market'
+              ? `${side.toUpperCase()} ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
+              : orderType === 'limit'
+              ? `SUBMIT LIMIT ${side.toUpperCase()} // ${currencySymbol}${effectivePrice.toFixed(2)}`
+              : `SUBMIT STOP-LOSS SELL // ${currencySymbol}${effectivePrice.toFixed(2)}`}
           </button>
         </form>
       )}
