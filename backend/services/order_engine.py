@@ -229,6 +229,7 @@ def _execute_sell(
         total_value=proceeds,
         cash_balance_after=wallet.current_cash_balance,
         realized_pnl=realized_pnl,
+        avg_buy_price=round(holding.avg_buy_price, 6),
         timestamp=_now_utc(),
     )
     db.add(txn)

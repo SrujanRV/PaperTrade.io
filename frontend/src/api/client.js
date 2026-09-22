@@ -72,3 +72,13 @@ export async function validateTicker(symbol) {
   return await res.json();
 }
 
+export async function fetchTrades(market) {
+  const res = await fetch(`/api/wallet/${market}/trades`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`Failed to fetch trades for ${market}: ${res.statusText}`);
+  }
+  return await res.json();
+}
+
+

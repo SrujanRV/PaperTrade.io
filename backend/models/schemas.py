@@ -138,6 +138,27 @@ class TransactionOut(BaseModel):
     total_value: float
     cash_balance_after: float
     realized_pnl: float | None   # non-null for sell transactions
+    avg_buy_price: float | None = None
     timestamp: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Trades (Closed Round-Trips) ───────────────────────────────────────────────
+
+class TradeOut(BaseModel):
+    """Closed round-trip trade resulting from a sell execution"""
+    id: int
+    wallet_id: int
+    order_id: int
+    ticker: str
+    quantity: float
+    avg_buy_price: float
+    sell_price: float
+    total_value: float
+    realized_pnl: float
+    realized_pnl_percent: float
+    timestamp: datetime
+
+    model_config = {"from_attributes": True}
+

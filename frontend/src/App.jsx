@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Watchlist } from './components/Watchlist';
 import { Portfolio } from './components/Portfolio';
 import { OrderHistory } from './components/OrderHistory';
+import { TradeLog } from './components/TradeLog';
 import { OrderTicket } from './components/OrderTicket';
 import { WalletSetupModal } from './components/WalletSetupModal';
 import { fetchWallet } from './api/client';
@@ -172,6 +173,16 @@ export default function App() {
             >
               Order History
             </button>
+            <button
+              onClick={() => setActiveTab('trades')}
+              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === 'trades'
+                  ? 'bg-[#232731] text-text-primary'
+                  : 'text-text-muted hover:text-text-primary'
+              }`}
+            >
+              Trade Log (P&L)
+            </button>
           </div>
 
           <div className="text-[11px] font-mono-tabular text-text-muted">
@@ -179,7 +190,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* View Content: Watchlist, Portfolio, or Order History + Dockable Order Ticket */}
+        {/* View Content: Watchlist, Portfolio, Order History, or Trade Log + Dockable Order Ticket */}
         <div className="flex flex-col lg:flex-row gap-6 items-start">
           {/* Main Table Area */}
           <div className="flex-1 w-full">
@@ -211,6 +222,16 @@ export default function App() {
                 selectedMarket={portfolioMarket}
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
+                refreshKey={refreshKey}
+              />
+            )}
+
+            {activeTab === 'trades' && (
+              <TradeLog
+                selectedMarket={portfolioMarket}
+                onSelectMarket={(m) => setPortfolioMarket(m)}
+                onGoToWatchlist={() => setActiveTab('watchlist')}
+                onGoToPortfolio={() => setActiveTab('portfolio')}
                 refreshKey={refreshKey}
               />
             )}

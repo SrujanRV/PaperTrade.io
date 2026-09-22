@@ -20,8 +20,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.orm import Wallet
-from models.schemas import HoldingWithPnLOut, WalletOut, WalletSetupRequest, WalletSummaryOut
+from models.orm import Transaction, Wallet
+from models.schemas import (
+    HoldingWithPnLOut,
+    TradeOut,
+    WalletOut,
+    WalletSetupRequest,
+    WalletSummaryOut,
+)
 from services.portfolio import get_wallet_summary
 
 logger = logging.getLogger(__name__)
@@ -138,3 +144,65 @@ def wallet_summary(
         total_unrealized_pnl=summary.total_unrealized_pnl,
         total_realized_pnl=summary.total_realized_pnl,
     )
+
+
+# ── GET /api/wallet/{market}/trades ──────────────────────────────────────────
+
+@router.get(
+    "/{market}/trades",
+    response_model=list[TradeOut],
+    summary="Closed trades log",
+    description=(
+        "Returns all closed trades (sell transactions) with realized P&L, "
+        "avg buy price, sell price, and return %, newest first."
+    ),
+)
+def get_trades(
+    market: Literal["IN", "US"],
+    db: Session = Depends(get_db),
+) -> list[TradeOut]:
+    wallet = db.query(Wallet).filter(Wallet.market == market).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No wallet found for market '{market}'. Call POST /api/wallet/setup first.",
+        )
+
+    txns = (
+        db.query(Transaction)
+        .filter(Transaction.wallet_id == wallet.id, Transaction.side == "sell")
+        .order_by(Transaction.timestamp.desc())
+        .all()
+    )
+
+    trades: list[TradeOut] = []
+    for t in txns:
+        pnl = t.realized_pnl or 0.0
+        qty = t.quantity or 1.0
+        sell_p = t.price
+        buy_p = (
+            t.avg_buy_price
+            if t.avg_buy_price is not None
+            else round(sell_p - (pnl / qty), 4)
+        )
+        cost = buy_p * qty
+        pnl_pct = round((pnl / cost) * 100, 2) if cost > 0 else 0.0
+
+        trades.append(
+            TradeOut(
+                id=t.id,
+                wallet_id=t.wallet_id,
+                order_id=t.order_id,
+                ticker=t.ticker,
+                quantity=qty,
+                avg_buy_price=buy_p,
+                sell_price=sell_p,
+                total_value=t.total_value,
+                realized_pnl=pnl,
+                realized_pnl_percent=pnl_pct,
+                timestamp=t.timestamp,
+            )
+        )
+
+    return trades
+

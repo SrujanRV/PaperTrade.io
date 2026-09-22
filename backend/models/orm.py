@@ -162,6 +162,7 @@ class Transaction(Base):
     total_value: Mapped[float] = mapped_column(Float, nullable=False)
     cash_balance_after: Mapped[float] = mapped_column(Float, nullable=False)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    avg_buy_price: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )

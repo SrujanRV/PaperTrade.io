@@ -41,6 +41,11 @@ if "transactions" in _inspector.get_table_names():
             _conn.execute(text("ALTER TABLE transactions ADD COLUMN realized_pnl FLOAT DEFAULT NULL"))
             _conn.commit()
         logger.info("Migration applied: added 'realized_pnl' column to transactions")
+    if "avg_buy_price" not in _existing_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE transactions ADD COLUMN avg_buy_price FLOAT DEFAULT NULL"))
+            _conn.commit()
+        logger.info("Migration applied: added 'avg_buy_price' column to transactions")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
