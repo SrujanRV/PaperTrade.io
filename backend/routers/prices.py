@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from config import SSE_PUSH_INTERVAL_SECONDS, SSE_PING_INTERVAL_SECONDS
-from services.price_feed import get_quotes, get_quote, is_market_open
+from services.price_feed import get_quotes, get_quote, is_market_open, search_symbols
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/prices", tags=["prices"])
@@ -189,3 +189,19 @@ async def validate_symbol(
     if quote.error:
         return {"valid": False, "symbol": symbol, "reason": quote.error}
     return {"valid": True, "symbol": symbol, "price": quote.price, "exchange": quote.exchange}
+
+
+# ── /api/prices/search ───────────────────────────────────────────────────────
+
+@router.get("/search")
+async def search_tickers(
+    q: str = Query(..., min_length=1, description="Company name or ticker query"),
+    market: str = Query("US", description="Market to scope results ('IN' or 'US')"),
+):
+    """
+    Search symbols by company name or ticker, scoped strictly to IN or US market.
+
+    Example: GET /api/prices/search?q=Tata&market=IN
+    """
+    return search_symbols(query=q, market=market)
+

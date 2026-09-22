@@ -19,8 +19,11 @@ PriceQuote fields:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -315,3 +318,88 @@ def get_quote(symbol: str, *, force_refresh: bool = False) -> PriceQuote:
 def clear_cache() -> None:
     """Wipe the in-memory price cache (useful in tests)."""
     _cache.clear()
+
+
+# ── Search / Autocomplete ─────────────────────────────────────────────────────
+
+_search_cache: dict[str, tuple[float, list[dict]]] = {}
+_SEARCH_CACHE_TTL = 300.0  # 5 minutes cache
+
+_US_EXCHANGES = {"NMS", "NYQ", "NGM", "NCM", "BTS", "ASE", "PCX", "PNK", "OQX", "OBB"}
+_FOREIGN_SUFFIXES = (
+    ".NS", ".BO", ".TO", ".DE", ".L", ".IL", ".AX", ".NE",
+    ".PA", ".F", ".AS", ".SW", ".HK", ".SS", ".SZ", ".T", ".SI", ".MX"
+)
+
+def search_symbols(query: str, market: str = "US") -> list[dict]:
+    """
+    Search for tickers and companies via Yahoo Finance autocomplete,
+    scoped strictly to the specified market ('IN' or 'US').
+    """
+    query_clean = query.strip()
+    if not query_clean:
+        return []
+
+    market_upper = market.upper()
+    cache_key = f"{market_upper}:{query_clean.lower()}"
+    now = time.monotonic()
+    if cache_key in _search_cache:
+        cached_time, cached_results = _search_cache[cache_key]
+        if now - cached_time < _SEARCH_CACHE_TTL:
+            return cached_results
+
+    url = (
+        f"https://query1.finance.yahoo.com/v1/finance/search?"
+        f"q={urllib.parse.quote(query_clean)}&quotesCount=15&newsCount=0"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        logger.warning("Yahoo Finance search failed for query %r: %s", query, exc)
+        return []
+
+    quotes = data.get("quotes", [])
+    results: list[dict] = []
+
+    for item in quotes:
+        sym = item.get("symbol", "").upper()
+        qtype = item.get("quoteType", "")
+        if qtype not in ("EQUITY", "ETF"):
+            continue
+
+        name = item.get("shortname") or item.get("longname") or sym
+        exch_disp = item.get("exchDisp", "")
+        exch_code = item.get("exchange", "")
+
+        if market_upper == "IN":
+            if sym.endswith(".NS") or sym.endswith(".BO") or exch_code in ("NSI", "BSE"):
+                exch = "BSE" if sym.endswith(".BO") or exch_code == "BSE" else "NSE"
+                results.append({
+                    "symbol": sym,
+                    "name": name,
+                    "exchange": exch,
+                    "currency": "INR",
+                })
+        elif market_upper == "US":
+            # US listed and not foreign suffix
+            if (exch_code in _US_EXCHANGES or exch_disp in ("NASDAQ", "NYSE", "NYSE ARCA", "BATS", "AMEX")) and not any(sym.endswith(sfx) for sfx in _FOREIGN_SUFFIXES):
+                exch = exch_disp if exch_disp in ("NASDAQ", "NYSE", "NYSE ARCA", "BATS", "AMEX") else "NASDAQ"
+                results.append({
+                    "symbol": sym,
+                    "name": name,
+                    "exchange": exch,
+                    "currency": "USD",
+                })
+
+        if len(results) >= 8:
+            break
+
+    _search_cache[cache_key] = (now, results)
+    return results
+

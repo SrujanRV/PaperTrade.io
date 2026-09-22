@@ -9,22 +9,55 @@ import { WalletSetupModal } from './components/WalletSetupModal';
 import { fetchWallet } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
 
-const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'RELIANCE.NS', 'TCS.NS'];
-const STORAGE_KEY = 'papertrade_watchlist';
+const LEGACY_STORAGE_KEY = 'papertrade_watchlist';
+const STORAGE_KEY_IN = 'papertrade_watchlist_IN';
+const STORAGE_KEY_US = 'papertrade_watchlist_US';
 
-function loadInitialWatchlist() {
+const DEFAULT_IN = ['RELIANCE.NS', 'TCS.NS'];
+const DEFAULT_US = ['AAPL', 'TSLA'];
+
+function loadInitialWatchlists() {
+  let inList = null;
+  let usList = null;
+
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+    const savedIn = localStorage.getItem(STORAGE_KEY_IN);
+    if (savedIn) {
+      const parsed = JSON.parse(savedIn);
+      if (Array.isArray(parsed)) inList = parsed;
+    }
+
+    const savedUs = localStorage.getItem(STORAGE_KEY_US);
+    if (savedUs) {
+      const parsed = JSON.parse(savedUs);
+      if (Array.isArray(parsed)) usList = parsed;
+    }
+
+    // Migrate from legacy single list if per-market lists aren't set up yet
+    if (!inList && !usList) {
+      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacy) {
+        const parsedLegacy = JSON.parse(legacy);
+        if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+          inList = parsedLegacy.filter((t) => t.toUpperCase().endsWith('.NS') || t.toUpperCase().endsWith('.BO'));
+          usList = parsedLegacy.filter((t) => !t.toUpperCase().endsWith('.NS') && !t.toUpperCase().endsWith('.BO'));
+        }
       }
     }
   } catch (err) {
-    console.error('Failed to load watchlist from localStorage:', err);
+    console.error('Failed to load or migrate watchlists from localStorage:', err);
   }
-  return DEFAULT_TICKERS;
+
+  if (!inList || inList.length === 0) inList = DEFAULT_IN;
+  if (!usList || usList.length === 0) usList = DEFAULT_US;
+
+  // Persist migrated format
+  try {
+    localStorage.setItem(STORAGE_KEY_IN, JSON.stringify(inList));
+    localStorage.setItem(STORAGE_KEY_US, JSON.stringify(usList));
+  } catch (e) {}
+
+  return { IN: inList, US: usList };
 }
 
 export default function App() {
@@ -33,10 +66,11 @@ export default function App() {
   const [checkingWallets, setCheckingWallets] = useState(true);
   const [showWalletModal, setShowWalletModal] = useState(false);
 
-  // Dynamic user-editable watchlist stored in localStorage
-  const [watchlist, setWatchlist] = useState(loadInitialWatchlist);
+  // Dynamic user-editable watchlists split by market ('IN' and 'US')
+  const [watchlists, setWatchlists] = useState(loadInitialWatchlists);
+  const [watchlistMarket, setWatchlistMarket] = useState('IN');
 
-  // Navigation tab state: 'watchlist' | 'portfolio' | 'history'
+  // Navigation tab state: 'watchlist' | 'portfolio' | 'history' | 'trades'
   const [activeTab, setActiveTab] = useState('watchlist');
 
   // Portfolio selected market: 'IN' | 'US'
@@ -48,13 +82,19 @@ export default function App() {
   // Trigger to force re-fetch of portfolio summary when orders execute
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const handleAddTicker = useCallback((ticker) => {
+  const handleAddTicker = useCallback((ticker, targetMarket) => {
     const sym = ticker.trim().toUpperCase();
-    setWatchlist((prev) => {
-      if (prev.includes(sym)) return prev;
-      const next = [...prev, sym];
+    const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO');
+    const market = targetMarket || (isIndian ? 'IN' : 'US');
+    const storageKey = market === 'IN' ? STORAGE_KEY_IN : STORAGE_KEY_US;
+
+    setWatchlists((prev) => {
+      const currentList = prev[market] || [];
+      if (currentList.includes(sym)) return prev;
+      const nextList = [...currentList, sym];
+      const next = { ...prev, [market]: nextList };
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        localStorage.setItem(storageKey, JSON.stringify(nextList));
       } catch (e) {
         console.error('Failed to save watchlist to localStorage:', e);
       }
@@ -62,29 +102,36 @@ export default function App() {
     });
   }, []);
 
-  const handleRemoveTicker = useCallback((ticker) => {
+  const handleRemoveTicker = useCallback((ticker, targetMarket) => {
     const sym = ticker.trim().toUpperCase();
-    setWatchlist((prev) => {
-      const next = prev.filter((t) => t !== sym);
+    const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO');
+    const market = targetMarket || (isIndian ? 'IN' : 'US');
+    const storageKey = market === 'IN' ? STORAGE_KEY_IN : STORAGE_KEY_US;
+
+    setWatchlists((prev) => {
+      const currentList = prev[market] || [];
+      const nextList = currentList.filter((t) => t !== sym);
+      const next = { ...prev, [market]: nextList };
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        localStorage.setItem(storageKey, JSON.stringify(nextList));
       } catch (e) {
         console.error('Failed to save watchlist to localStorage:', e);
       }
       return next;
     });
+
     if (selectedTicker?.toUpperCase() === sym) {
       setSelectedTicker(null);
     }
   }, [selectedTicker]);
 
-  // Combine watchlist tickers with all currently held tickers for comprehensive SSE streaming
+  // Combine both market watchlist tickers with all currently held tickers for comprehensive SSE streaming
   const subscribedTickers = useMemo(() => {
-    const set = new Set(watchlist);
+    const set = new Set([...(watchlists.IN || []), ...(watchlists.US || [])]);
     inWallet?.holdings?.forEach((h) => set.add(h.ticker));
     usWallet?.holdings?.forEach((h) => set.add(h.ticker));
     return Array.from(set);
-  }, [watchlist, inWallet, usWallet]);
+  }, [watchlists, inWallet, usWallet]);
 
   // Live SSE stream for all active assets
   const { prices, status: connectionStatus } = usePriceStream(subscribedTickers);
@@ -196,7 +243,9 @@ export default function App() {
           <div className="flex-1 w-full">
             {activeTab === 'watchlist' && (
               <Watchlist
-                tickers={watchlist}
+                selectedMarket={watchlistMarket}
+                onSelectMarket={(m) => setWatchlistMarket(m)}
+                tickers={watchlists[watchlistMarket] || []}
                 prices={prices}
                 connectionStatus={connectionStatus}
                 selectedTicker={selectedTicker}

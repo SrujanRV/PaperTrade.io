@@ -81,4 +81,15 @@ export async function fetchTrades(market) {
   return await res.json();
 }
 
+export async function searchTickers(query, market = 'US') {
+  if (!query || !query.trim()) return [];
+  const res = await fetch(`/api/prices/search?q=${encodeURIComponent(query.trim())}&market=${market}`);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Symbol search failed');
+  }
+  return await res.json();
+}
+
+
 
