@@ -22,9 +22,11 @@ function formatDate(isoString) {
 
 export function TradeLog({
   selectedMarket,
+  wallet,
   onSelectMarket,
   onGoToWatchlist,
   onGoToPortfolio,
+  onOpenWalletSetup,
   refreshKey,
 }) {
   const [trades, setTrades] = useState([]);
@@ -175,6 +177,24 @@ export function TradeLog({
         ) : error ? (
           <div className="p-6 text-center text-xs font-mono-tabular text-red">
             ERROR: {error}
+          </div>
+        ) : !wallet ? (
+          /* Uninitialized Wallet State */
+          <div className="p-8 text-center space-y-3 font-mono-tabular">
+            <p className="text-xs text-text-muted uppercase tracking-wide">
+              NO {selectedMarket === 'IN' ? 'INDIAN' : 'US'} WALLET INITIALIZED — Set up your paper trading balance to begin recording trades.
+            </p>
+            {onOpenWalletSetup && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenWalletSetup(selectedMarket)}
+                  className="px-4 py-1.5 bg-accent hover:bg-accent/90 text-white text-xs uppercase font-semibold transition-colors"
+                >
+                  INITIALIZE {selectedMarket} WALLET
+                </button>
+              </div>
+            )}
           </div>
         ) : trades.length === 0 ? (
           <div className="p-8 text-center space-y-3 font-mono-tabular">

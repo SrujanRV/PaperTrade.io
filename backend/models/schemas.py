@@ -30,6 +30,16 @@ class WalletSetupRequest(BaseModel):
         return round(v, 2)
 
 
+class BalanceResetRequest(BaseModel):
+    """Body for PATCH /api/wallet/{market}/balance"""
+    cash_balance: float = Field(..., gt=0, description="New cash balance")
+
+    @field_validator("cash_balance")
+    @classmethod
+    def round_balance(cls, v: float) -> float:
+        return round(v, 2)
+
+
 class HoldingOut(BaseModel):
     """Holding row — plain, no live price (used by GET /api/wallet/{market})"""
     id: int

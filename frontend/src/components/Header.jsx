@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Wallet, Settings } from 'lucide-react';
+import { Activity, Settings } from 'lucide-react';
 
 function formatMoney(amount, currency) {
   if (amount === undefined || amount === null || isNaN(amount)) return '—';
@@ -10,7 +10,7 @@ function formatMoney(amount, currency) {
   });
 }
 
-export function Header({ inWallet, usWallet, onOpenWalletSetup }) {
+export function Header({ inWallet, usWallet, onOpenWalletSetup, onOpenSettings }) {
   const [currentTime, setCurrentTime] = useState('');
 
   useEffect(() => {
@@ -48,9 +48,20 @@ export function Header({ inWallet, usWallet, onOpenWalletSetup }) {
           <span className="text-[10px] font-mono-tabular uppercase text-text-muted font-medium">
             IN CASH:
           </span>
-          <span className="text-xs font-mono-tabular font-semibold text-text-primary">
-            ₹{formatMoney(inWallet?.current_cash_balance, 'INR')}
-          </span>
+          {inWallet ? (
+            <span className="text-xs font-mono-tabular font-semibold text-text-primary">
+              ₹{formatMoney(inWallet.current_cash_balance, 'INR')}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onOpenWalletSetup && onOpenWalletSetup('IN')}
+              title="Initialize Indian Wallet"
+              className="text-xs font-mono-tabular font-semibold text-accent hover:underline uppercase"
+            >
+              [SETUP]
+            </button>
+          )}
         </div>
 
         {/* US Market Wallet */}
@@ -58,9 +69,20 @@ export function Header({ inWallet, usWallet, onOpenWalletSetup }) {
           <span className="text-[10px] font-mono-tabular uppercase text-text-muted font-medium">
             US CASH:
           </span>
-          <span className="text-xs font-mono-tabular font-semibold text-text-primary">
-            ${formatMoney(usWallet?.current_cash_balance, 'USD')}
-          </span>
+          {usWallet ? (
+            <span className="text-xs font-mono-tabular font-semibold text-text-primary">
+              ${formatMoney(usWallet.current_cash_balance, 'USD')}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onOpenWalletSetup && onOpenWalletSetup('US')}
+              title="Initialize US Wallet"
+              className="text-xs font-mono-tabular font-semibold text-accent hover:underline uppercase"
+            >
+              [SETUP]
+            </button>
+          )}
         </div>
 
         {/* Global Clock */}
@@ -68,10 +90,10 @@ export function Header({ inWallet, usWallet, onOpenWalletSetup }) {
           <span>{currentTime}</span>
         </div>
 
-        {/* Reset / Settings Button */}
+        {/* Settings Button */}
         <button
-          onClick={onOpenWalletSetup}
-          title="Configure Wallet Balances"
+          onClick={onOpenSettings}
+          title="Terminal Settings & Portfolio Management"
           className="p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-hover border border-border transition-colors"
         >
           <Settings className="w-3.5 h-3.5" />

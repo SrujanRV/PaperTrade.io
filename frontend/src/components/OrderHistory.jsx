@@ -34,8 +34,10 @@ function formatRejectReason(reason) {
 
 export function OrderHistory({
   selectedMarket = 'IN',
+  wallet,
   onSelectMarket,
   onGoToWatchlist,
+  onOpenWalletSetup,
   refreshKey = 0,
 }) {
   const [orders, setOrders] = useState([]);
@@ -113,7 +115,26 @@ export function OrderHistory({
           </span>
         </div>
 
-        {orders.length === 0 ? (
+        {!wallet ? (
+          /* Uninitialized Wallet State */
+          <div className="p-10 text-center space-y-4 font-mono-tabular">
+            <div className="flex items-center justify-center space-x-2 text-xs text-text-muted">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span>
+                NO {selectedMarket === 'IN' ? 'INDIAN' : 'US'} WALLET INITIALIZED — Set up your paper balance to begin placing orders
+              </span>
+            </div>
+            {onOpenWalletSetup && (
+              <button
+                type="button"
+                onClick={() => onOpenWalletSetup(selectedMarket)}
+                className="px-4 py-1.5 bg-accent hover:bg-accent/90 text-white text-xs uppercase tracking-wider font-sans font-semibold transition-colors"
+              >
+                INITIALIZE {selectedMarket} WALLET
+              </button>
+            )}
+          </div>
+        ) : orders.length === 0 ? (
           /* Empty State */
           <div className="p-10 text-center space-y-3 font-mono-tabular">
             <div className="flex items-center justify-center space-x-2 text-xs text-text-muted">

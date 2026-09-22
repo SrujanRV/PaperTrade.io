@@ -6,12 +6,14 @@ import { OrderHistory } from './components/OrderHistory';
 import { TradeLog } from './components/TradeLog';
 import { OrderTicket } from './components/OrderTicket';
 import { WalletSetupModal } from './components/WalletSetupModal';
+import { SettingsModal } from './components/SettingsModal';
 import { fetchWallet } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
 
 const LEGACY_STORAGE_KEY = 'papertrade_watchlist';
 const STORAGE_KEY_IN = 'papertrade_watchlist_IN';
 const STORAGE_KEY_US = 'papertrade_watchlist_US';
+const STORAGE_KEY_DEFAULT_TAB = 'papertrade_default_tab';
 
 const DEFAULT_IN = ['RELIANCE.NS', 'TCS.NS'];
 const DEFAULT_US = ['AAPL', 'TSLA'];
@@ -60,18 +62,34 @@ function loadInitialWatchlists() {
   return { IN: inList, US: usList };
 }
 
+function loadInitialDefaultTab() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_DEFAULT_TAB);
+    if (saved && ['watchlist', 'portfolio', 'history', 'trades'].includes(saved)) {
+      return saved;
+    }
+  } catch (e) {}
+  return 'watchlist';
+}
+
 export default function App() {
   const [inWallet, setInWallet] = useState(null);
   const [usWallet, setUsWallet] = useState(null);
   const [checkingWallets, setCheckingWallets] = useState(true);
+
+  // Setup modal state
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [walletModalTarget, setWalletModalTarget] = useState('BOTH'); // 'IN' | 'US' | 'BOTH'
+
+  // Settings modal state
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Dynamic user-editable watchlists split by market ('IN' and 'US')
   const [watchlists, setWatchlists] = useState(loadInitialWatchlists);
   const [watchlistMarket, setWatchlistMarket] = useState('IN');
 
   // Navigation tab state: 'watchlist' | 'portfolio' | 'history' | 'trades'
-  const [activeTab, setActiveTab] = useState('watchlist');
+  const [activeTab, setActiveTab] = useState(loadInitialDefaultTab);
 
   // Portfolio selected market: 'IN' | 'US'
   const [portfolioMarket, setPortfolioMarket] = useState('IN');
@@ -81,6 +99,15 @@ export default function App() {
 
   // Trigger to force re-fetch of portfolio summary when orders execute
   const [refreshKey, setRefreshKey] = useState(0);
+
+  const handleUpdateDefaultTab = useCallback((tabId) => {
+    setActiveTab(tabId);
+    try {
+      localStorage.setItem(STORAGE_KEY_DEFAULT_TAB, tabId);
+    } catch (e) {
+      console.error('Failed to save default tab to localStorage:', e);
+    }
+  }, []);
 
   const handleAddTicker = useCallback((ticker, targetMarket) => {
     const sym = ticker.trim().toUpperCase();
@@ -125,6 +152,16 @@ export default function App() {
     }
   }, [selectedTicker]);
 
+  const handleResetWatchlistsToDefaults = useCallback(() => {
+    setWatchlists({ IN: DEFAULT_IN, US: DEFAULT_US });
+    try {
+      localStorage.setItem(STORAGE_KEY_IN, JSON.stringify(DEFAULT_IN));
+      localStorage.setItem(STORAGE_KEY_US, JSON.stringify(DEFAULT_US));
+    } catch (e) {
+      console.error('Failed to reset watchlists to defaults:', e);
+    }
+  }, []);
+
   // Combine both market watchlist tickers with all currently held tickers for comprehensive SSE streaming
   const subscribedTickers = useMemo(() => {
     const set = new Set([...(watchlists.IN || []), ...(watchlists.US || [])]);
@@ -146,11 +183,11 @@ export default function App() {
       setInWallet(inData);
       setUsWallet(usData);
 
-      // If either wallet doesn't exist yet, trigger setup modal
-      if (!inData || !usData) {
+      // On initial load, if neither wallet exists and user hasn't dismissed setup in this session, show setup modal
+      const dismissed = sessionStorage.getItem('papertrade_setup_dismissed');
+      if (!inData && !usData && !dismissed) {
         setShowWalletModal(true);
-      } else {
-        setShowWalletModal(false);
+        setWalletModalTarget('BOTH');
       }
     } catch (err) {
       console.error('Error fetching wallets:', err);
@@ -162,6 +199,18 @@ export default function App() {
   useEffect(() => {
     refreshWallets();
   }, [refreshWallets]);
+
+  const handleOpenWalletSetup = useCallback((target = 'BOTH') => {
+    setWalletModalTarget(target);
+    setShowWalletModal(true);
+  }, []);
+
+  const handleCloseWalletModal = useCallback(() => {
+    setShowWalletModal(false);
+    try {
+      sessionStorage.setItem('papertrade_setup_dismissed', 'true');
+    } catch (e) {}
+  }, []);
 
   // Determine which wallet corresponds to the selected ticker in OrderTicket
   const isSelectedIndian =
@@ -175,13 +224,16 @@ export default function App() {
     setRefreshKey((k) => k + 1);
   }
 
+  const activePortfolioWallet = portfolioMarket === 'IN' ? inWallet : usWallet;
+
   return (
     <div className="min-h-screen bg-base text-text-primary flex flex-col font-sans selection:bg-accent/30 selection:text-white">
       {/* Persistent Terminal Header with Wallets */}
       <Header
         inWallet={inWallet}
         usWallet={usWallet}
-        onOpenWalletSetup={() => setShowWalletModal(true)}
+        onOpenWalletSetup={handleOpenWalletSetup}
+        onOpenSettings={() => setShowSettingsModal(true)}
       />
 
       {/* Main Terminal Workspace */}
@@ -261,6 +313,7 @@ export default function App() {
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onSelectTicker={(ticker) => setSelectedTicker(ticker)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
+                onOpenWalletSetup={handleOpenWalletSetup}
                 livePrices={prices}
                 refreshKey={refreshKey}
               />
@@ -269,8 +322,10 @@ export default function App() {
             {activeTab === 'history' && (
               <OrderHistory
                 selectedMarket={portfolioMarket}
+                wallet={activePortfolioWallet}
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
+                onOpenWalletSetup={handleOpenWalletSetup}
                 refreshKey={refreshKey}
               />
             )}
@@ -278,9 +333,11 @@ export default function App() {
             {activeTab === 'trades' && (
               <TradeLog
                 selectedMarket={portfolioMarket}
+                wallet={activePortfolioWallet}
                 onSelectMarket={(m) => setPortfolioMarket(m)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
                 onGoToPortfolio={() => setActiveTab('portfolio')}
+                onOpenWalletSetup={handleOpenWalletSetup}
                 refreshKey={refreshKey}
               />
             )}
@@ -295,21 +352,40 @@ export default function App() {
                 wallet={activeWallet}
                 onClose={() => setSelectedTicker(null)}
                 onOrderExecuted={handleOrderExecuted}
+                onOpenWalletSetup={handleOpenWalletSetup}
               />
             </div>
           )}
         </div>
       </main>
 
-      {/* Wallet Setup First-Run Modal */}
+      {/* Dedicated Dismissible Wallet Setup Modal */}
       <WalletSetupModal
         isOpen={showWalletModal}
+        targetMarket={walletModalTarget}
+        onClose={handleCloseWalletModal}
         onComplete={() => {
+          setShowWalletModal(false);
           refreshWallets();
           setRefreshKey((k) => k + 1);
         }}
         initialIN={inWallet?.starting_balance || 500000}
         initialUS={usWallet?.starting_balance || 10000}
+      />
+
+      {/* Restructured Settings Modal */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        inWallet={inWallet}
+        usWallet={usWallet}
+        onWalletUpdated={() => {
+          refreshWallets();
+          setRefreshKey((k) => k + 1);
+        }}
+        onResetWatchlists={handleResetWatchlistsToDefaults}
+        defaultTab={activeTab}
+        onUpdateDefaultTab={handleUpdateDefaultTab}
       />
     </div>
   );

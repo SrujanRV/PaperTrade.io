@@ -34,6 +34,7 @@ export function Portfolio({
   onSelectMarket,
   onSelectTicker,
   onGoToWatchlist,
+  onOpenWalletSetup,
   livePrices = {},
   refreshKey = 0,
 }) {
@@ -142,10 +143,11 @@ export function Portfolio({
             Total Wallet Value
           </div>
           <div className="text-base font-semibold text-text-primary mt-1">
-            {currencySymbol}
-            {formatMoney(totalWalletValue, currency)}
+            {summary ? `${currencySymbol}${formatMoney(totalWalletValue, currency)}` : '—'}
           </div>
-          <div className="text-[10px] text-text-muted mt-0.5">Cash + Holdings</div>
+          <div className="text-[10px] text-text-muted mt-0.5">
+            {summary ? 'Cash + Holdings' : 'Wallet uninitialized'}
+          </div>
         </div>
 
         {/* Available Cash */}
@@ -154,10 +156,11 @@ export function Portfolio({
             Available Cash
           </div>
           <div className="text-base font-semibold text-text-primary mt-1">
-            {currencySymbol}
-            {formatMoney(cashBalance, currency)}
+            {summary ? `${currencySymbol}${formatMoney(cashBalance, currency)}` : '—'}
           </div>
-          <div className="text-[10px] text-text-muted mt-0.5">Ready to trade</div>
+          <div className="text-[10px] text-text-muted mt-0.5">
+            {summary ? 'Ready to trade' : 'No balance set'}
+          </div>
         </div>
 
         {/* Total Unrealized P&L */}
@@ -167,19 +170,21 @@ export function Portfolio({
           </div>
           <div
             className={`text-base font-semibold mt-1 ${
-              totalUnrealizedPnL > 0
+              !summary
+                ? 'text-text-muted'
+                : totalUnrealizedPnL > 0
                 ? 'text-green'
                 : totalUnrealizedPnL < 0
                 ? 'text-red'
                 : 'text-text-primary'
             }`}
           >
-            {currencySymbol}
-            {formatSignedMoney(totalUnrealizedPnL, currency)}
+            {summary ? `${currencySymbol}${formatSignedMoney(totalUnrealizedPnL, currency)}` : '—'}
           </div>
           <div className="text-[10px] text-text-muted mt-0.5">
-            Holdings value: {currencySymbol}
-            {formatMoney(totalHoldingsValue, currency)}
+            {summary
+              ? `Holdings value: ${currencySymbol}${formatMoney(totalHoldingsValue, currency)}`
+              : 'No open holdings'}
           </div>
         </div>
 
@@ -190,17 +195,20 @@ export function Portfolio({
           </div>
           <div
             className={`text-base font-semibold mt-1 ${
-              totalRealizedPnL > 0
+              !summary
+                ? 'text-text-muted'
+                : totalRealizedPnL > 0
                 ? 'text-green'
                 : totalRealizedPnL < 0
                 ? 'text-red'
                 : 'text-text-primary'
             }`}
           >
-            {currencySymbol}
-            {formatSignedMoney(totalRealizedPnL, currency)}
+            {summary ? `${currencySymbol}${formatSignedMoney(totalRealizedPnL, currency)}` : '—'}
           </div>
-          <div className="text-[10px] text-text-muted mt-0.5">From closed sales</div>
+          <div className="text-[10px] text-text-muted mt-0.5">
+            {summary ? 'From closed sales' : 'No trade history'}
+          </div>
         </div>
       </div>
 
@@ -209,15 +217,34 @@ export function Portfolio({
         {/* Table Subheader */}
         <div className="h-9 px-3 bg-[#111317] border-b border-border flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-text-primary">
-            Open Positions ({liveHoldings.length})
+            Open Positions ({summary ? liveHoldings.length : 0})
           </span>
           <span className="text-[11px] font-mono-tabular text-text-muted">
             LIVE UNREALIZED P&L TRACKING
           </span>
         </div>
 
-        {liveHoldings.length === 0 ? (
-          /* Empty State */
+        {!summary ? (
+          /* Uninitialized Wallet State */
+          <div className="p-10 text-center space-y-4 font-mono-tabular">
+            <div className="flex items-center justify-center space-x-2 text-xs text-text-muted">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span>
+                NO {selectedMarket === 'IN' ? 'INDIAN' : 'US'} WALLET INITIALIZED — Set up your paper balance to begin investing
+              </span>
+            </div>
+            {onOpenWalletSetup && (
+              <button
+                type="button"
+                onClick={() => onOpenWalletSetup(selectedMarket)}
+                className="px-4 py-1.5 bg-accent hover:bg-accent/90 text-white text-xs uppercase tracking-wider font-sans font-semibold transition-colors"
+              >
+                INITIALIZE {selectedMarket} WALLET
+              </button>
+            )}
+          </div>
+        ) : liveHoldings.length === 0 ? (
+          /* Empty Positions State */
           <div className="p-10 text-center space-y-3 font-mono-tabular">
             <div className="flex items-center justify-center space-x-2 text-xs text-text-muted">
               <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />

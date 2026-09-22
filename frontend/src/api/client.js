@@ -91,5 +91,32 @@ export async function searchTickers(query, market = 'US') {
   return await res.json();
 }
 
+export async function resetWalletBalance(market, cashBalance) {
+  const res = await fetch(`/api/wallet/${market}/balance`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cash_balance: Number(cashBalance),
+    }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to update balance for ${market}`);
+  }
+  return await res.json();
+}
+
+export async function deleteWallet(market) {
+  const res = await fetch(`/api/wallet/${market}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to delete ${market} wallet`);
+  }
+  return await res.json();
+}
+
+
 
 

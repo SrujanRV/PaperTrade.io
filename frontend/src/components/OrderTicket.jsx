@@ -9,6 +9,7 @@ export function OrderTicket({
   wallet,
   onClose,
   onOrderExecuted,
+  onOpenWalletSetup,
 }) {
   const [side, setSide] = useState('buy'); // 'buy' | 'sell'
   const [quantity, setQuantity] = useState(1);
@@ -190,8 +191,55 @@ export function OrderTicket({
         currencySymbol={currencySymbol}
       />
 
-      {/* Filled Order State */}
-      {filledOrder ? (
+      {/* Missing Wallet Inline Notice */}
+      {!wallet ? (
+        <div className="p-5 bg-[#121418] border-t border-border space-y-4 font-mono-tabular">
+          <div className="flex items-start space-x-2.5">
+            <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1" />
+            <div>
+              <div className="text-xs font-semibold text-text-primary uppercase tracking-wider">
+                NO {market} WALLET INITIALIZED
+              </div>
+              <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
+                You need a {currency} paper trading wallet to place orders for{' '}
+                <span className="text-text-primary font-semibold">{upper}</span>. Set up a starting balance to begin trading.
+              </div>
+            </div>
+          </div>
+
+          <div className="p-3 bg-base border border-border text-[11px] text-text-muted space-y-1">
+            <div className="flex justify-between">
+              <span>REQUIRED ASSET:</span>
+              <span className="text-text-primary font-semibold">{upper}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>MARKET EXCH:</span>
+              <span className="text-text-primary">{exchange}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>CURRENCY:</span>
+              <span className="text-text-primary">{currency}</span>
+            </div>
+          </div>
+
+          <div className="pt-2 space-y-2">
+            <button
+              type="button"
+              onClick={() => onOpenWalletSetup && onOpenWalletSetup(market)}
+              className="w-full h-9 bg-accent hover:bg-accent/90 text-white text-xs font-semibold uppercase tracking-wider transition-colors select-none"
+            >
+              SET UP {market} WALLET
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full h-8 bg-base hover:bg-surface-hover border border-border text-text-muted hover:text-text-primary text-xs font-semibold uppercase tracking-wider transition-colors select-none"
+            >
+              DISMISS & BROWSE WATCHLIST
+            </button>
+          </div>
+        </div>
+      ) : filledOrder ? (
         <div className="p-5 text-center space-y-4 font-mono-tabular">
           <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
             <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />

@@ -174,6 +174,36 @@ def test_negative_balance_rejected():
     print("  ✅  Negative balance correctly rejected (422 Unprocessable Entity)")
 
 
+def test_update_wallet_balance():
+    section("10. PATCH /api/wallet/IN/balance — adjust cash balance")
+    r = client.patch("/api/wallet/IN/balance", json={"cash_balance": 750000.50})
+    print(f"  Status: {r.status_code}  body={r.json()}")
+    check(r.status_code == 200, f"Expected 200, got {r.status_code}")
+    check(r.json()["current_cash_balance"] == 750000.50, "Updated cash balance mismatch")
+
+    # Verify via GET
+    r2 = client.get("/api/wallet/IN")
+    check(r2.json()["current_cash_balance"] == 750000.50, "GET did not reflect updated balance")
+    print("  ✅  Balance updated successfully without wiping wallet")
+
+
+def test_delete_wallet():
+    section("11. DELETE /api/wallet/IN — delete wallet and cascade")
+    r = client.delete("/api/wallet/IN")
+    print(f"  Status: {r.status_code}  body={r.json()}")
+    check(r.status_code == 200, f"Expected 200, got {r.status_code}")
+    check(r.json()["status"] == "deleted", "Expected status 'deleted'")
+
+    # Verify GET returns 404
+    r2 = client.get("/api/wallet/IN")
+    check(r2.status_code == 404, f"Expected 404 after deletion, got {r2.status_code}")
+
+    # Verify US wallet is untouched
+    r_us = client.get("/api/wallet/US")
+    check(r_us.status_code == 200, f"Expected US wallet to remain active, got {r_us.status_code}")
+    print("  ✅  Wallet deleted cleanly; US wallet remains unaffected")
+
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 def main():
@@ -191,6 +221,8 @@ def main():
         test_get_unknown_market,
         test_zero_balance_rejected,
         test_negative_balance_rejected,
+        test_update_wallet_balance,
+        test_delete_wallet,
     ]
 
     failures = []
@@ -212,9 +244,10 @@ def main():
             print(f"    ✗ {name}: {msg}")
         sys.exit(1)
     else:
-        print("  RESULT: All 9 tests passed ✅")
+        print(f"  RESULT: All {len(tests)} tests passed ✅")
     print("═" * 65 + "\n")
 
 
 if __name__ == "__main__":
     main()
+

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.orm import Transaction, Wallet
 from models.schemas import (
+    BalanceResetRequest,
     HoldingWithPnLOut,
     TradeOut,
     WalletOut,
@@ -205,4 +206,60 @@ def get_trades(
         )
 
     return trades
+
+
+# ── PATCH /api/wallet/{market}/balance ─────────────────────────────────────────
+
+@router.patch(
+    "/{market}/balance",
+    response_model=WalletOut,
+    summary="Update wallet cash balance",
+    description="Adjusts current_cash_balance without wiping transaction or order history.",
+)
+def update_wallet_balance(
+    market: Literal["IN", "US"],
+    body: BalanceResetRequest,
+    db: Session = Depends(get_db),
+) -> WalletOut:
+    wallet = db.query(Wallet).filter(Wallet.market == market).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No wallet found for market '{market}'. Call POST /api/wallet/setup first.",
+        )
+
+    logger.info(
+        "Updating %s wallet cash balance from %.2f to %.2f",
+        market, wallet.current_cash_balance, body.cash_balance,
+    )
+    wallet.current_cash_balance = body.cash_balance
+    db.commit()
+    db.refresh(wallet)
+    return WalletOut.model_validate(wallet)
+
+
+# ── DELETE /api/wallet/{market} ───────────────────────────────────────────────
+
+@router.delete(
+    "/{market}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete portfolio and reset wallet",
+    description="Permanently deletes the wallet and all associated holdings, orders, and transactions.",
+)
+def delete_wallet(
+    market: Literal["IN", "US"],
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    wallet = db.query(Wallet).filter(Wallet.market == market).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No wallet found for market '{market}'.",
+        )
+
+    logger.info("Deleting %s wallet and all associated records", market)
+    db.delete(wallet)
+    db.commit()
+    return {"status": "deleted", "market": market}
+
 
