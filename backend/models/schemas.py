@@ -7,7 +7,7 @@ the database shape (we can rename/add DB columns without breaking clients).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -46,6 +46,8 @@ class HoldingOut(BaseModel):
     ticker: str
     quantity: float
     avg_buy_price: float
+    square_off_date: date | None = None
+    is_intraday: bool = False
     last_updated: datetime
 
     model_config = {"from_attributes": True}
@@ -79,6 +81,8 @@ class HoldingWithPnLOut(BaseModel):
     unrealized_pnl_pct: float
     currency: str
     market_open: bool
+    square_off_date: date | None = None
+    is_intraday: bool = False
     price_error: str | None = None
 
 
@@ -118,6 +122,15 @@ class OrderRequest(BaseModel):
     trigger_price: float | None = Field(
         default=None, gt=0, description="Trigger price for stop-loss order"
     )
+    holding_days: int | None = Field(
+        default=None, ge=0, description="Optional holding duration in trading days (0 = intraday)"
+    )
+    square_off_date: str | None = Field(
+        default=None, description="Target date for auto square-off ('YYYY-MM-DD')"
+    )
+    is_intraday: bool = Field(
+        default=False, description="Whether this is an intraday position"
+    )
 
     @field_validator("ticker")
     @classmethod
@@ -145,6 +158,9 @@ class OrderOut(BaseModel):
     executed_price: float | None = None
     status: str
     reject_reason: str | None = None
+    square_off_date: date | None = None
+    is_intraday: bool = False
+    triggered_by: str | None = None
     created_at: datetime
     executed_at: datetime | None = None
 
@@ -166,6 +182,7 @@ class TransactionOut(BaseModel):
     cash_balance_after: float
     realized_pnl: float | None   # non-null for sell transactions
     avg_buy_price: float | None = None
+    triggered_by: str | None = None
     timestamp: datetime
 
     model_config = {"from_attributes": True}
@@ -185,7 +202,9 @@ class TradeOut(BaseModel):
     total_value: float
     realized_pnl: float
     realized_pnl_percent: float
+    triggered_by: str | None = None
     timestamp: datetime
 
     model_config = {"from_attributes": True}
+
 

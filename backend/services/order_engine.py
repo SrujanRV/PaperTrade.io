@@ -12,13 +12,14 @@ Supports:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from models.orm import Holding, Order, Transaction, Wallet
 from services.price_feed import PriceQuote, get_quote
+from services.trading_calendar import calculate_square_off_date, is_near_market_close
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ def _execute_buy(
     order_type: str = "market",
     requested_price: float | None = None,
     trigger_price: float | None = None,
+    square_off_date: date | None = None,
+    is_intraday: bool = False,
+    triggered_by: str | None = None,
     existing_order: Order | None = None,
 ) -> Order:
     total_cost = round(price * quantity, 2)
@@ -137,12 +141,19 @@ def _execute_buy(
             (holding.quantity * holding.avg_buy_price + quantity * price) / new_qty, 6
         )
         holding.quantity = round(new_qty, 8)
+        if square_off_date:
+            # Preserve earlier square-off date if already set, else set new
+            if not holding.square_off_date or square_off_date < holding.square_off_date:
+                holding.square_off_date = square_off_date
+                holding.is_intraday = is_intraday
     else:
         holding = Holding(
             wallet_id=wallet.id,
             ticker=ticker,
             quantity=round(quantity, 8),
             avg_buy_price=round(price, 6),
+            square_off_date=square_off_date,
+            is_intraday=is_intraday,
         )
         db.add(holding)
 
@@ -151,6 +162,11 @@ def _execute_buy(
         existing_order.executed_price = price
         existing_order.status = "filled"
         existing_order.executed_at = _now_utc()
+        if square_off_date:
+            existing_order.square_off_date = square_off_date
+            existing_order.is_intraday = is_intraday
+        if triggered_by:
+            existing_order.triggered_by = triggered_by
         order = existing_order
     else:
         order = Order(
@@ -163,6 +179,9 @@ def _execute_buy(
             trigger_price=trigger_price,
             executed_price=price,
             status="filled",
+            square_off_date=square_off_date,
+            is_intraday=is_intraday,
+            triggered_by=triggered_by,
             created_at=_now_utc(),
             executed_at=_now_utc(),
         )
@@ -205,6 +224,7 @@ def _execute_sell(
     order_type: str = "market",
     requested_price: float | None = None,
     trigger_price: float | None = None,
+    triggered_by: str | None = None,
     existing_order: Order | None = None,
 ) -> Order:
     holding = (
@@ -239,6 +259,8 @@ def _execute_sell(
         existing_order.executed_price = price
         existing_order.status = "filled"
         existing_order.executed_at = _now_utc()
+        if triggered_by:
+            existing_order.triggered_by = triggered_by
         order = existing_order
     else:
         order = Order(
@@ -251,6 +273,7 @@ def _execute_sell(
             trigger_price=trigger_price,
             executed_price=price,
             status="filled",
+            triggered_by=triggered_by,
             created_at=_now_utc(),
             executed_at=_now_utc(),
         )
@@ -270,6 +293,7 @@ def _execute_sell(
         cash_balance_after=wallet.current_cash_balance,
         realized_pnl=realized_pnl,
         avg_buy_price=round(holding.avg_buy_price, 6),
+        triggered_by=triggered_by,
         timestamp=_now_utc(),
     )
     db.add(txn)
@@ -277,9 +301,9 @@ def _execute_sell(
     db.refresh(order)
 
     logger.info(
-        "%s SELL filled: %s ×%s @ %.4f proceeds=%s %.2f realized_pnl=%.4f | cash_after=%.2f",
+        "%s SELL filled: %s ×%s @ %.4f proceeds=%s %.2f realized_pnl=%.4f by=%s | cash_after=%.2f",
         order_type.upper(), ticker, quantity, price, wallet.currency, proceeds,
-        realized_pnl, wallet.current_cash_balance,
+        realized_pnl, triggered_by, wallet.current_cash_balance,
     )
     return order
 
@@ -295,9 +319,13 @@ def place_order(
     order_type: str = "market",
     requested_price: float | None = None,
     trigger_price: float | None = None,
+    holding_days: int | None = None,
+    square_off_date: str | date | None = None,
+    is_intraday: bool = False,
 ) -> Order:
     """
     Unified entry point for placing market, limit, and stop-loss orders.
+    Supports optional holding duration (holding_days or explicit square_off_date) for BUY orders.
     """
     ticker = ticker.strip().upper()
     side = side.strip().lower()
@@ -307,6 +335,25 @@ def place_order(
         raise ValueError(f"Invalid side: {side!r} — must be 'buy' or 'sell'")
     if order_type not in ("market", "limit", "stop_loss"):
         raise ValueError(f"Invalid order_type: {order_type!r}")
+
+    # ── Resolve square-off date for BUY orders ────────────────────────────────
+    parsed_sq_date: date | None = None
+    if side == "buy":
+        if square_off_date:
+            if isinstance(square_off_date, date):
+                parsed_sq_date = square_off_date
+            elif isinstance(square_off_date, str) and square_off_date.strip():
+                try:
+                    parsed_sq_date = date.fromisoformat(square_off_date.strip())
+                except ValueError:
+                    parsed_sq_date = None
+        elif holding_days is not None:
+            calc = calculate_square_off_date(market, holding_days=holding_days)
+            parsed_sq_date = date.fromisoformat(calc["square_off_date"])
+            is_intraday = calc["is_intraday"]
+        elif is_intraday:
+            calc = calculate_square_off_date(market, holding_days=0)
+            parsed_sq_date = date.fromisoformat(calc["square_off_date"])
 
     # ── Wallet lookup ──────────────────────────────────────────────────────────
     wallet = db.query(Wallet).filter(Wallet.market == market).first()
@@ -343,7 +390,12 @@ def place_order(
                 order_type="market",
             )
         if side == "buy":
-            return _execute_buy(db, wallet, ticker, quantity, quote.price, order_type="market")
+            return _execute_buy(
+                db, wallet, ticker, quantity, quote.price,
+                order_type="market",
+                square_off_date=parsed_sq_date,
+                is_intraday=is_intraday,
+            )
         else:
             return _execute_sell(db, wallet, ticker, quantity, quote.price, order_type="market")
 
@@ -369,6 +421,8 @@ def place_order(
                 return _execute_buy(
                     db, wallet, ticker, quantity, quote.price,
                     order_type="limit", requested_price=limit_price,
+                    square_off_date=parsed_sq_date,
+                    is_intraday=is_intraday,
                 )
         else:
             holding = (
@@ -396,6 +450,8 @@ def place_order(
             side=side,
             quantity=quantity,
             requested_price=limit_price,
+            square_off_date=parsed_sq_date,
+            is_intraday=is_intraday,
             status="pending",
             created_at=_now_utc(),
         )
@@ -403,8 +459,8 @@ def place_order(
         db.commit()
         db.refresh(pending_order)
         logger.info(
-            "LIMIT %s pending: %s ×%s limit=%.4f (current=%.4f, market_open=%s)",
-            side.upper(), ticker, quantity, limit_price, quote.price, quote.market_open,
+            "LIMIT %s pending: %s ×%s limit=%.4f (current=%.4f, market_open=%s, sq_off=%s)",
+            side.upper(), ticker, quantity, limit_price, quote.price, quote.market_open, parsed_sq_date,
         )
         return pending_order
 
@@ -610,3 +666,81 @@ def cancel_pending_order(db: Session, order_id: int) -> Order:
 
     logger.info("Order #%d CANCELLED by user (%s %s %s)", order.id, order.order_type, order.side, order.ticker)
     return order
+
+
+# ── Auto Square-Off Evaluation ────────────────────────────────────────────────
+
+def evaluate_auto_square_off(
+    db: Session,
+    quotes: list[PriceQuote] | None = None,
+    force_time_check: bool = False,
+    market_filter: str | None = None,
+) -> list[Order]:
+    """
+    Scans active holdings where square_off_date <= today.
+    If market is near close (last 15 minutes of trading session) or force_time_check is True,
+    executes an automatic market SELL for whatever remaining quantity is held.
+    Marks orders and transactions with triggered_by="auto_square_off".
+    """
+    from config import MARKET_SESSIONS
+
+    quote_map = {q.symbol.upper(): q for q in quotes} if quotes else {}
+    executed_orders: list[Order] = []
+
+    markets = [market_filter.upper()] if market_filter else ["IN", "US"]
+
+    for m in markets:
+        # Check if near close (or forced for tests)
+        near_close = is_near_market_close(m)
+        if not near_close and not force_time_check:
+            continue
+
+        # Determine current date in that market's timezone
+        exchange = "NSE" if m == "IN" else "NASDAQ"
+        session_info = MARKET_SESSIONS.get(exchange)
+        tz = session_info["tz"] if session_info else None
+        now_local = datetime.now(tz=tz) if tz else datetime.now()
+        market_today = now_local.date()
+
+        wallets = db.query(Wallet).filter(Wallet.market == m).all()
+        for wallet in wallets:
+            # Query holdings with a square_off_date that has arrived or passed
+            holdings = (
+                db.query(Holding)
+                .filter(
+                    Holding.wallet_id == wallet.id,
+                    Holding.quantity > 0,
+                    Holding.square_off_date.isnot(None),
+                    Holding.square_off_date <= market_today,
+                )
+                .all()
+            )
+
+            for h in holdings:
+                ticker = h.ticker.upper()
+                quote = quote_map.get(ticker)
+                if not quote:
+                    quote = get_quote(ticker)
+                    quote_map[ticker] = quote
+
+                fill_price = quote.price if quote and quote.price > 0 else h.avg_buy_price
+                qty_to_sell = h.quantity
+
+                logger.info(
+                    "Auto square-off triggered for %s (%s) qty=%.4f @ %.4f (sq_off_date=%s, today=%s)",
+                    ticker, m, qty_to_sell, fill_price, h.square_off_date, market_today,
+                )
+
+                sell_order = _execute_sell(
+                    db=db,
+                    wallet=wallet,
+                    ticker=ticker,
+                    quantity=qty_to_sell,
+                    price=fill_price,
+                    order_type="market",
+                    triggered_by="auto_square_off",
+                )
+                executed_orders.append(sell_order)
+
+    return executed_orders
+

@@ -291,9 +291,16 @@ export function OrderHistory({
 
                       {/* Side */}
                       <td className="px-3 py-0 align-middle font-semibold uppercase text-xs">
-                        <span className={isBuy ? 'text-green' : 'text-red'}>
-                          {o.side.toUpperCase()}
-                        </span>
+                        <div className="flex items-center space-x-1.5">
+                          <span className={isBuy ? 'text-green' : 'text-red'}>
+                            {o.side.toUpperCase()}
+                          </span>
+                          {o.triggered_by === 'auto_square_off' && (
+                            <span className="px-1.5 py-0.2 bg-purple-900/40 border border-purple-500/50 text-purple-300 text-[9px] font-bold tracking-wider rounded font-mono-tabular">
+                              AUTO
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Quantity */}
@@ -359,7 +366,9 @@ export function OrderHistory({
                             {cancellingId === o.id ? 'CANCELLING...' : 'CANCEL'}
                           </button>
                         ) : isFilled ? (
-                          <span className="text-text-muted">Executed @ market</span>
+                          <span className="text-text-muted">
+                            {o.triggered_by === 'auto_square_off' ? 'Auto square-off at close' : 'Executed @ market'}
+                          </span>
                         ) : isCancelled ? (
                           <span className="text-text-muted">Cancelled by user</span>
                         ) : (

@@ -10,9 +10,9 @@ Four tables for Phase 2:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from sqlalchemy import (
-    DateTime, Float, ForeignKey,
+    Boolean, Date, DateTime, Float, ForeignKey,
     Integer, String, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -87,6 +87,8 @@ class Holding(Base):
     ticker: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     avg_buy_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc, onupdate=_now_utc
     )
@@ -94,7 +96,7 @@ class Holding(Base):
     wallet: Mapped[Wallet] = relationship("Wallet", back_populates="holdings")
 
     def __repr__(self) -> str:
-        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price}>"
+        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} sq_off={self.square_off_date}>"
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────
@@ -103,11 +105,14 @@ class Order(Base):
     """
     Every order attempt — both filled and rejected.
 
-    order_type:       "market" (only for Phase 2; "limit"/"stop" added Phase 5)
+    order_type:       "market" | "limit" | "stop_loss"
     side:             "buy" | "sell"
-    requested_price:  None for market orders; set for limit/stop (Phase 5)
+    requested_price:  None for market orders; set for limit/stop
     executed_price:   actual fill price (= live market price for market orders)
-    status:           "filled" | "rejected"
+    status:           "pending" | "filled" | "rejected" | "cancelled"
+    square_off_date:  target date for time-based auto square-off
+    is_intraday:      True if order is an intraday position
+    triggered_by:     "user" | "auto_square_off" | "stop_loss"
     """
     __tablename__ = "orders"
 
@@ -124,6 +129,9 @@ class Order(Base):
     executed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)         # "pending" | "filled" | "rejected" | "cancelled"
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    triggered_by: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
@@ -135,7 +143,7 @@ class Order(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Order {self.side.upper()} {self.quantity}x {self.ticker} [{self.status}]>"
+        return f"<Order {self.side.upper()} {self.quantity}x {self.ticker} [{self.status}] sq_off={self.square_off_date}>"
 
 
 # ── Transaction ───────────────────────────────────────────────────────────────
@@ -146,6 +154,7 @@ class Transaction(Base):
 
     total_value:         quantity × executed_price (always positive)
     cash_balance_after:  wallet.current_cash_balance after this transaction
+    triggered_by:        "auto_square_off" | None
     """
     __tablename__ = "transactions"
 
@@ -164,6 +173,7 @@ class Transaction(Base):
     cash_balance_after: Mapped[float] = mapped_column(Float, nullable=False)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     avg_buy_price: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    triggered_by: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
@@ -172,4 +182,5 @@ class Transaction(Base):
     order: Mapped[Order] = relationship("Order", back_populates="transaction")
 
     def __repr__(self) -> str:
-        return f"<Transaction {self.side.upper()} {self.quantity}x {self.ticker} @ {self.price}>"
+        return f"<Transaction {self.side.upper()} {self.quantity}x {self.ticker} @ {self.price} by={self.triggered_by}>"
+

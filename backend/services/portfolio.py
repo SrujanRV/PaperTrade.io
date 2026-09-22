@@ -14,6 +14,7 @@ import dataclasses
 import logging
 from dataclasses import dataclass, field
 
+from datetime import date
 from sqlalchemy.orm import Session
 
 from models.orm import Transaction, Wallet
@@ -38,6 +39,8 @@ class HoldingPnL:
     unrealized_pnl_pct: float
     currency: str
     market_open: bool
+    square_off_date: date | None = None
+    is_intraday: bool = False
     price_error: str | None = None
 
 
@@ -93,6 +96,8 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     unrealized_pnl_pct=0.0,
                     currency=wallet.currency,
                     market_open=False,
+                    square_off_date=h.square_off_date,
+                    is_intraday=bool(h.is_intraday),
                     price_error=error_msg,
                 )
             )
@@ -117,6 +122,8 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     unrealized_pnl_pct=unrealized_pnl_pct,
                     currency=wallet.currency,
                     market_open=q.market_open,
+                    square_off_date=h.square_off_date,
+                    is_intraday=bool(h.is_intraday),
                     price_error=None,
                 )
             )

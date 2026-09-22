@@ -201,6 +201,7 @@ def get_trades(
                 total_value=t.total_value,
                 realized_pnl=pnl,
                 realized_pnl_percent=pnl_pct,
+                triggered_by=t.triggered_by,
                 timestamp=t.timestamp,
             )
         )

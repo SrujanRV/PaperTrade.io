@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X } from 'lucide-react';
-import { placeOrder } from '../api/client';
+import { placeOrder, calculateSquareOffDate } from '../api/client';
 import { LivePriceChart } from './LivePriceChart';
 
 export function OrderTicket({
@@ -21,6 +21,13 @@ export function OrderTicket({
   const [errorMsg, setErrorMsg] = useState(null);
   const [completedOrder, setCompletedOrder] = useState(null);
 
+  // Holding duration state: 'none' | 'intraday' | '1_day' | 'custom'
+  const [durationMode, setDurationMode] = useState('none');
+  const [customDays, setCustomDays] = useState(2);
+  const [calculatedSquareOff, setCalculatedSquareOff] = useState(null);
+  const squareOffCacheRef = useRef(new Map());
+  const debounceTimerRef = useRef(null);
+
   // Reset state when ticker changes
   useEffect(() => {
     setOrderType('market');
@@ -28,6 +35,9 @@ export function OrderTicket({
     setQuantity(1);
     setLimitPrice(quote?.current_price ? String(quote.current_price) : '');
     setTriggerPrice(quote?.current_price ? String(Number((quote.current_price * 0.95).toFixed(2))) : '');
+    setDurationMode('none');
+    setCustomDays(2);
+    setCalculatedSquareOff(null);
     setErrorMsg(null);
     setCompletedOrder(null);
   }, [ticker]);
@@ -70,6 +80,48 @@ export function OrderTicket({
     (h) => h.ticker.toUpperCase() === upper
   );
   const ownedQuantity = existingHolding?.quantity ?? 0;
+
+  // Fetch resolved square-off date with in-memory caching and debouncing
+  const fetchResolvedDate = useCallback((mkt, days) => {
+    const cacheKey = `${mkt}:${days}`;
+    if (squareOffCacheRef.current.has(cacheKey)) {
+      setCalculatedSquareOff(squareOffCacheRef.current.get(cacheKey));
+      return;
+    }
+    calculateSquareOffDate(mkt, days)
+      .then((data) => {
+        squareOffCacheRef.current.set(cacheKey, data);
+        setCalculatedSquareOff(data);
+      })
+      .catch((err) => {
+        console.error('Failed to calculate square-off date:', err);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (side !== 'buy' || durationMode === 'none') {
+      setCalculatedSquareOff(null);
+      return;
+    }
+
+    const days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
+    const cacheKey = `${market}:${days}`;
+
+    // Instant update if in cache
+    if (squareOffCacheRef.current.has(cacheKey)) {
+      setCalculatedSquareOff(squareOffCacheRef.current.get(cacheKey));
+      return;
+    }
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchResolvedDate(market, days);
+    }, 100);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [side, durationMode, customDays, market, fetchResolvedDate]);
 
   // Validation checks
   const hasInsufficientFunds = side === 'buy' && totalCost > cashBalance;
@@ -128,7 +180,7 @@ export function OrderTicket({
     setSubmitting(true);
 
     try {
-      const order = await placeOrder({
+      const orderPayload = {
         market,
         ticker: upper,
         side,
@@ -136,7 +188,15 @@ export function OrderTicket({
         order_type: orderType,
         requested_price: orderType === 'limit' ? Number(limitPrice) : orderType === 'stop_loss' ? Number(triggerPrice) : null,
         trigger_price: orderType === 'stop_loss' ? Number(triggerPrice) : null,
-      });
+      };
+
+      if (side === 'buy' && durationMode !== 'none' && calculatedSquareOff) {
+        orderPayload.holding_days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
+        orderPayload.square_off_date = calculatedSquareOff.square_off_date;
+        orderPayload.is_intraday = durationMode === 'intraday';
+      }
+
+      const order = await placeOrder(orderPayload);
 
       if (order.status === 'filled' || order.status === 'pending') {
         setCompletedOrder(order);
@@ -350,6 +410,14 @@ export function OrderTicket({
                 </span>
               </div>
             )}
+            {completedOrder.square_off_date && (
+              <div className="flex justify-between text-text-muted border-t border-border/40 pt-1">
+                <span>AUTO SQUARE-OFF:</span>
+                <span className="text-accent font-semibold">
+                  {completedOrder.square_off_date} {completedOrder.is_intraday ? '(INTRADAY)' : ''}
+                </span>
+              </div>
+            )}
           </div>
 
           {completedOrder.status === 'pending' && (
@@ -532,6 +600,101 @@ export function OrderTicket({
               ))}
             </div>
           </div>
+
+          {/* Holding Duration Selector (BUY side only) */}
+          {side === 'buy' && (
+            <div className="font-mono-tabular space-y-2">
+              <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-wider">
+                <span>HOLDING DURATION</span>
+                <span className="text-[9px] text-[#707788]">
+                  {durationMode === 'none'
+                    ? 'OPEN-ENDED HOLD'
+                    : durationMode === 'intraday'
+                    ? 'AUTO SQUARES OFF TODAY'
+                    : `SQUARES OFF IN ${durationMode === '1_day' ? '1 TRADING DAY' : `${customDays} TRADING DAYS`}`}
+                </span>
+              </div>
+
+              {/* Segmented Duration Buttons */}
+              <div className="grid grid-cols-4 gap-1 p-1 bg-base border border-border">
+                {[
+                  { id: 'none', label: 'NONE' },
+                  { id: 'intraday', label: 'INTRADAY' },
+                  { id: '1_day', label: '1 DAY' },
+                  { id: 'custom', label: 'CUSTOM' },
+                ].map((d) => {
+                  const active = durationMode === d.id;
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setDurationMode(d.id)}
+                      className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                        active
+                          ? 'bg-border text-text-primary'
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom Days Input Stepper */}
+              {durationMode === 'custom' && (
+                <div className="flex items-center space-x-2 pt-0.5">
+                  <label className="text-[11px] text-text-muted uppercase">
+                    Trading Days:
+                  </label>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => setCustomDays((prev) => Math.max(1, prev - 1))}
+                      className="w-7 h-7 bg-base border border-border text-xs text-text-primary hover:bg-surface transition-colors flex items-center justify-center font-bold"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      max="90"
+                      value={customDays}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val) && val >= 1) setCustomDays(val);
+                      }}
+                      className="w-14 h-7 bg-base border border-border text-center text-xs font-semibold text-text-primary focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCustomDays((prev) => Math.min(90, prev + 1))}
+                      className="w-7 h-7 bg-base border border-border text-xs text-text-primary hover:bg-surface transition-colors flex items-center justify-center font-bold"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Resolved Square-Off Date & Shift Warning */}
+              {durationMode !== 'none' && calculatedSquareOff && (
+                <div className="p-2.5 bg-[#12151b] border border-border/80 text-[11px] space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-text-muted">AUTO SQUARE-OFF:</span>
+                    <span className="text-accent font-semibold">
+                      {calculatedSquareOff.formatted_date} (~{market === 'IN' ? '3:15 PM IST' : '3:45 PM ET'})
+                    </span>
+                  </div>
+                  {calculatedSquareOff.is_shifted && calculatedSquareOff.shift_reason && (
+                    <div className="text-[10px] text-amber-400/90 leading-tight pt-0.5">
+                      ⚠️ {calculatedSquareOff.shift_reason}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Cost Breakdown */}
           <div className="p-3 bg-base border border-border space-y-1.5 text-xs font-mono-tabular">

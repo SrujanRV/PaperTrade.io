@@ -275,6 +275,11 @@ export function TradeLog({
                               {suffix}
                             </span>
                           )}
+                          {t.triggered_by === 'auto_square_off' && (
+                            <span className="px-1.5 py-0.2 bg-purple-900/40 border border-purple-500/50 text-purple-300 text-[9px] font-bold tracking-wider rounded font-mono-tabular">
+                              AUTO
+                            </span>
+                          )}
                         </div>
                       </td>
 

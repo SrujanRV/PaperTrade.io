@@ -12,15 +12,22 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models.orm import Order, Wallet
 from models.schemas import OrderOut, OrderRequest
-from services.order_engine import cancel_pending_order, evaluate_pending_orders, place_order
+from services.order_engine import (
+    cancel_pending_order,
+    evaluate_pending_orders,
+    evaluate_auto_square_off,
+    place_order,
+)
+from services.trading_calendar import calculate_square_off_date
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +66,9 @@ def create_order(body: OrderRequest, db: Session = Depends(get_db)) -> OrderOut:
             order_type=body.order_type,
             requested_price=body.requested_price,
             trigger_price=body.trigger_price,
+            holding_days=body.holding_days,
+            square_off_date=body.square_off_date,
+            is_intraday=body.is_intraday,
         )
     except ValueError as exc:
         # Wallet not found or invalid side/type
@@ -67,6 +77,45 @@ def create_order(body: OrderRequest, db: Session = Depends(get_db)) -> OrderOut:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
     return OrderOut.model_validate(order)
+
+
+# ── GET /api/orders/calculate-square-off ───────────────────────────────────────
+
+@router.get(
+    "/calculate-square-off",
+    summary="Calculate square-off date based on market trading days",
+    description="Resolves N trading days to a calendar date, accounting for market weekends and holidays.",
+)
+def get_calculated_square_off(
+    market: Literal["IN", "US"] = Query("US", description="Market identifier: IN or US"),
+    days: int = Query(0, ge=0, description="Holding duration in trading days (0 = intraday)"),
+    start_date: str | None = Query(None, description="Optional ISO start date 'YYYY-MM-DD'"),
+) -> dict:
+    parsed_start: date | None = None
+    if start_date:
+        try:
+            parsed_start = date.fromisoformat(start_date.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format — expected YYYY-MM-DD")
+
+    return calculate_square_off_date(market=market, start_date=parsed_start, holding_days=days)
+
+
+# ── POST /api/orders/trigger-square-off ───────────────────────────────────────
+
+@router.post(
+    "/trigger-square-off",
+    response_model=list[OrderOut],
+    summary="Trigger auto square-off evaluation",
+    description="Scans holdings where square_off_date <= today and executes market sells (force_time_check=True for test/manual execution).",
+)
+def trigger_square_off_evaluation(
+    market: Literal["IN", "US"] | None = Query(None, description="Optional market filter"),
+    db: Session = Depends(get_db),
+) -> list[OrderOut]:
+    executed = evaluate_auto_square_off(db=db, force_time_check=True, market_filter=market)
+    return [OrderOut.model_validate(o) for o in executed]
+
 
 
 # ── GET /api/orders/{market}/pending ──────────────────────────────────────────

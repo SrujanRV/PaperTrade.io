@@ -297,13 +297,28 @@ export function Portfolio({
                   return (
                     <tr
                       key={h.id || h.ticker}
-                      className="h-[38px] border-b border-border hover:bg-surface-hover transition-colors text-xs"
+                      className="min-h-[40px] border-b border-border hover:bg-surface-hover transition-colors text-xs"
                     >
-                      {/* Symbol */}
-                      <td className="px-3 py-0 align-middle">
-                        <span className="font-semibold text-text-primary">
-                          {h.ticker}
-                        </span>
+                      {/* Symbol + Square-Off Badge */}
+                      <td className="px-3 py-1.5 align-middle">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-text-primary leading-tight">
+                            {h.ticker}
+                          </span>
+                          {h.square_off_date && (
+                            <div className="mt-0.5 flex items-center">
+                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono-tabular font-bold tracking-wider uppercase border ${
+                                h.is_intraday || h.square_off_date <= new Date().toISOString().split('T')[0]
+                                  ? 'bg-accent/15 text-accent border-accent/40'
+                                  : 'bg-purple-900/30 text-purple-300 border-purple-500/40'
+                              }`}>
+                                {h.is_intraday || h.square_off_date <= new Date().toISOString().split('T')[0]
+                                  ? 'AUTO SQ-OFF: TODAY (CLOSE)'
+                                  : `SQ-OFF: ${new Date(h.square_off_date + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }).toUpperCase()}`}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* Quantity */}
