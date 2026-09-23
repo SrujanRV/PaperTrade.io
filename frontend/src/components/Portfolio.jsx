@@ -74,9 +74,14 @@ export function Portfolio({
   const liveHoldings = holdings.map((h) => {
     const liveQuote = livePrices[h.ticker.toUpperCase()];
     const currentPrice = liveQuote ? liveQuote.current_price : h.current_price;
+    const isShort = Boolean(h.is_short);
     const costBasis = Number((h.avg_buy_price * h.quantity).toFixed(2));
-    const currentValue = Number((currentPrice * h.quantity).toFixed(2));
-    const unrealizedPnL = Number((currentValue - costBasis).toFixed(2));
+    const currentValue = isShort
+      ? Number((-1 * currentPrice * h.quantity).toFixed(2))
+      : Number((currentPrice * h.quantity).toFixed(2));
+    const unrealizedPnL = isShort
+      ? Number(((h.avg_buy_price - currentPrice) * h.quantity).toFixed(2))
+      : Number((currentValue - costBasis).toFixed(2));
     const unrealizedPnLPct =
       costBasis > 0 ? (unrealizedPnL / costBasis) * 100 : 0;
 
@@ -271,7 +276,7 @@ export function Portfolio({
                 <tr className="h-8 border-b border-border text-[11px] uppercase text-text-muted font-sans font-medium select-none bg-[#0f1014]">
                   <th className="px-3 font-medium">Symbol</th>
                   <th className="px-3 text-right font-medium">Qty</th>
-                  <th className="px-3 text-right font-medium">Avg Buy Price</th>
+                  <th className="px-3 text-right font-medium">Avg Entry Price</th>
                   <th className="px-3 text-right font-medium">Current Price</th>
                   <th className="px-3 text-right font-medium">Market Value</th>
                   <th className="px-3 text-right font-medium">Unrealized P&L</th>
@@ -299,12 +304,19 @@ export function Portfolio({
                       key={h.id || h.ticker}
                       className="min-h-[40px] border-b border-border hover:bg-surface-hover transition-colors text-xs"
                     >
-                      {/* Symbol + Square-Off Badge */}
+                      {/* Symbol + Badges */}
                       <td className="px-3 py-1.5 align-middle">
                         <div className="flex flex-col">
-                          <span className="font-semibold text-text-primary leading-tight">
-                            {h.ticker}
-                          </span>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-semibold text-text-primary leading-tight">
+                              {h.ticker}
+                            </span>
+                            {h.is_short && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-mono-tabular font-bold tracking-wider uppercase border bg-red/15 text-red border-red/40">
+                                SHORT
+                              </span>
+                            )}
+                          </div>
                           {h.square_off_date && (
                             <div className="mt-0.5 flex items-center">
                               {(() => {
@@ -330,11 +342,13 @@ export function Portfolio({
                       </td>
 
                       {/* Quantity */}
-                      <td className="px-3 py-0 text-right align-middle text-text-primary">
-                        {h.quantity}
+                      <td className="px-3 py-0 text-right align-middle font-medium">
+                        <span className={h.is_short ? 'text-red' : 'text-text-primary'}>
+                          {h.is_short ? `-${h.quantity}` : h.quantity}
+                        </span>
                       </td>
 
-                      {/* Avg Buy Price */}
+                      {/* Avg Entry Price */}
                       <td className="px-3 py-0 text-right align-middle text-text-primary font-medium">
                         {currencySymbol}
                         {formatMoney(h.avg_buy_price, currency)}
@@ -368,7 +382,7 @@ export function Portfolio({
                         </span>
                       </td>
 
-                      {/* Trade Action */}
+                      {/* Trade / Cover Action */}
                       <td className="px-3 py-0 text-right align-middle">
                         <div className="flex items-center justify-end space-x-1.5">
                           <button
@@ -381,9 +395,13 @@ export function Portfolio({
                           </button>
                           <button
                             onClick={() => onSelectTicker && onSelectTicker(h.ticker)}
-                            className="px-2 py-1 bg-base border border-border text-[10px] text-text-primary hover:border-accent hover:text-white uppercase font-sans font-medium transition-colors"
+                            className={`px-2 py-1 text-[10px] uppercase font-sans font-medium transition-colors ${
+                              h.is_short
+                                ? 'bg-green/10 border border-green/50 text-green hover:bg-green hover:text-black'
+                                : 'bg-base border border-border text-text-primary hover:border-accent hover:text-white'
+                            }`}
                           >
-                            TRADE
+                            {h.is_short ? 'COVER' : 'TRADE'}
                           </button>
                         </div>
                       </td>

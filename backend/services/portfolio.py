@@ -41,6 +41,7 @@ class HoldingPnL:
     market_open: bool
     square_off_date: date | None = None
     is_intraday: bool = False
+    is_short: bool = False
     square_off_quantity: float | None = None
     lots: list[dict] = field(default_factory=list)
     price_error: str | None = None
@@ -81,6 +82,7 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
     result: list[HoldingPnL] = []
     for h in holdings:
         q = quotes.get(h.ticker)
+        is_short = bool(h.is_short)
 
         # Calculate square-off quantity and lots list
         timed_lots = [l for l in (h.lots or []) if l.square_off_date is not None]
@@ -92,6 +94,7 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                 "buy_price": l.buy_price,
                 "square_off_date": l.square_off_date,
                 "is_intraday": l.is_intraday,
+                "is_short": bool(l.is_short),
                 "created_at": l.created_at,
             }
             for l in (h.lots or [])
@@ -100,6 +103,8 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
         if q is None or q.error:
             error_msg = (q.error if q else f"No quote returned for {h.ticker}")
             logger.warning("Could not price holding %s: %s", h.ticker, error_msg)
+            cost_basis = round(h.avg_buy_price * h.quantity, 2)
+            current_val = -cost_basis if is_short else 0.0
             result.append(
                 HoldingPnL(
                     id=h.id,
@@ -107,23 +112,31 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     quantity=h.quantity,
                     avg_buy_price=h.avg_buy_price,
                     current_price=0.0,
-                    current_value=0.0,
-                    cost_basis=round(h.avg_buy_price * h.quantity, 2),
+                    current_value=current_val,
+                    cost_basis=cost_basis,
                     unrealized_pnl=0.0,
                     unrealized_pnl_pct=0.0,
                     currency=wallet.currency,
                     market_open=False,
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
+                    is_short=is_short,
                     square_off_quantity=sq_off_qty,
                     lots=lots_data,
                     price_error=error_msg,
                 )
             )
         else:
-            cost_basis     = round(h.avg_buy_price * h.quantity, 2)
-            current_value  = round(q.price * h.quantity, 2)
-            unrealized_pnl = round(current_value - cost_basis, 2)
+            cost_basis = round(h.avg_buy_price * h.quantity, 2)
+            if is_short:
+                # For short: current_value is a liability (-current_price * qty)
+                current_value = round(-1.0 * q.price * h.quantity, 2)
+                # Gain when current price drops below avg_buy_price (entry price)
+                unrealized_pnl = round((h.avg_buy_price - q.price) * h.quantity, 2)
+            else:
+                current_value = round(q.price * h.quantity, 2)
+                unrealized_pnl = round(current_value - cost_basis, 2)
+
             unrealized_pnl_pct = (
                 round((unrealized_pnl / cost_basis) * 100, 4)
                 if cost_basis != 0 else 0.0
@@ -143,6 +156,7 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     market_open=q.market_open,
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
+                    is_short=is_short,
                     square_off_quantity=sq_off_qty,
                     lots=lots_data,
                     price_error=None,
@@ -154,18 +168,19 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
 
 def get_realized_pnl(db: Session, wallet: Wallet) -> float:
     """
-    Sum of realized_pnl from all sell Transactions for this wallet.
+    Sum of realized_pnl from all closed Transactions (sells and short cover-buys) for this wallet.
 
-    realized_pnl per sell = (sell_price - avg_buy_price_at_sale) × quantity
+    realized_pnl per long sell = (sell_price - avg_buy_price_at_sale) × quantity
+    realized_pnl per short cover-buy = (avg_short_entry_price - buy_cover_price) × quantity
     It is stored on the Transaction at fill time, so it's always accurate
     even after a position is fully closed and the Holding row is deleted.
     """
-    sell_txns = (
+    pnl_txns = (
         db.query(Transaction)
-        .filter(Transaction.wallet_id == wallet.id, Transaction.side == "sell")
+        .filter(Transaction.wallet_id == wallet.id, Transaction.realized_pnl.isnot(None))
         .all()
     )
-    total = sum(t.realized_pnl or 0.0 for t in sell_txns)
+    total = sum(t.realized_pnl for t in pnl_txns if t.realized_pnl is not None)
     return round(total, 6)
 
 

@@ -25,7 +25,11 @@ function formatRejectReason(reason) {
   const map = {
     market_closed: 'Market closed',
     insufficient_funds: 'Insufficient cash balance',
+    insufficient_margin: 'Insufficient margin for short',
     insufficient_holdings: 'Insufficient shares owned',
+    intraday_only_for_short: 'Intraday only for shorts',
+    us_short_not_supported: 'US shorts not supported',
+    no_short_position: 'No short position to cover',
     invalid_ticker: 'Unresolvable symbol',
     wrong_market: 'Wrong market wallet',
     stop_loss_sell_only: 'Stop-loss is sell-only',
@@ -292,9 +296,17 @@ export function OrderHistory({
                       {/* Side */}
                       <td className="px-3 py-0 align-middle font-semibold uppercase text-xs">
                         <div className="flex items-center space-x-1.5">
-                          <span className={isBuy ? 'text-green' : 'text-red'}>
-                            {o.side.toUpperCase()}
-                          </span>
+                          {o.is_short ? (
+                            isBuy ? (
+                              <span className="text-green font-bold">COVER BUY</span>
+                            ) : (
+                              <span className="text-red font-bold">SHORT SELL</span>
+                            )
+                          ) : (
+                            <span className={isBuy ? 'text-green' : 'text-red'}>
+                              {o.side.toUpperCase()}
+                            </span>
+                          )}
                           {o.triggered_by === 'auto_square_off' && (
                             <span className="px-1.5 py-0.2 bg-purple-900/40 border border-purple-500/50 text-purple-300 text-[9px] font-bold tracking-wider rounded font-mono-tabular">
                               AUTO

@@ -227,11 +227,11 @@ export function TradeLog({
                 <tr className="h-8 border-b border-border text-[11px] uppercase text-text-muted font-medium select-none bg-[#0f1014]">
                   <th className="px-3 font-medium">Timestamp (UTC)</th>
                   <th className="px-3 font-medium">Symbol</th>
-                  <th className="px-3 text-right font-medium">Qty Sold</th>
-                  <th className="px-3 text-right font-medium">Avg Buy Price</th>
-                  <th className="px-3 text-right font-medium">Sell Price</th>
+                  <th className="px-3 text-right font-medium">Qty Closed</th>
+                  <th className="px-3 text-right font-medium">Entry Price</th>
+                  <th className="px-3 text-right font-medium">Exit Price</th>
                   <th className="px-3 text-right font-medium">Realized P&L</th>
-                  <th className="px-3 text-right font-medium">Proceeds</th>
+                  <th className="px-3 text-right font-medium">Value</th>
                 </tr>
               </thead>
               <tbody>
@@ -254,6 +254,10 @@ export function TradeLog({
                     ? `${pnlSign}${t.realized_pnl_percent.toFixed(2)}%`
                     : '';
 
+                  // For Long: entry is buy_p, exit is sell_p. For Short: entry is sell_p, exit is buy_p (cover)
+                  const entryPrice = t.is_short ? t.sell_price : t.avg_buy_price;
+                  const exitPrice = t.is_short ? t.avg_buy_price : t.sell_price;
+
                   return (
                     <tr
                       key={t.id}
@@ -266,13 +270,18 @@ export function TradeLog({
 
                       {/* Symbol */}
                       <td className="px-3 py-0 align-middle">
-                        <div className="flex items-baseline space-x-1.5">
+                        <div className="flex items-center space-x-1.5">
                           <span className="text-xs font-semibold text-text-primary">
                             {displaySymbol}
                           </span>
                           {suffix && (
                             <span className="text-[10px] text-text-muted">
                               {suffix}
+                            </span>
+                          )}
+                          {t.is_short && (
+                            <span className="px-1.5 py-0.2 bg-red/15 border border-red/40 text-red text-[9px] font-bold tracking-wider rounded font-mono-tabular">
+                              SHORT
                             </span>
                           )}
                           {t.triggered_by === 'auto_square_off' && (
@@ -283,21 +292,21 @@ export function TradeLog({
                         </div>
                       </td>
 
-                      {/* Quantity Sold */}
+                      {/* Quantity Closed */}
                       <td className="px-3 py-0 text-right align-middle text-xs font-medium text-text-primary">
                         {t.quantity}
                       </td>
 
-                      {/* Avg Buy Price (Primary contrast) */}
+                      {/* Entry Price */}
                       <td className="px-3 py-0 text-right align-middle text-xs font-medium text-text-primary">
                         {currencySymbol}
-                        {formatMoney(t.avg_buy_price, currency)}
+                        {formatMoney(entryPrice, currency)}
                       </td>
 
-                      {/* Sell Price (Primary contrast) */}
+                      {/* Exit Price */}
                       <td className="px-3 py-0 text-right align-middle text-xs font-medium text-text-primary">
                         {currencySymbol}
-                        {formatMoney(t.sell_price, currency)}
+                        {formatMoney(exitPrice, currency)}
                       </td>
 
                       {/* Realized P&L (Value + %) */}

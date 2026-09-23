@@ -75,11 +75,22 @@ export function OrderTicket({
   const totalCost = Number((effectivePrice * (Number(quantity) || 0)).toFixed(2));
   const cashBalance = wallet?.current_cash_balance ?? 0;
 
-  // Check available holding if selling
+  // Check available holding if selling or covering
   const existingHolding = wallet?.holdings?.find(
     (h) => h.ticker.toUpperCase() === upper
   );
-  const ownedQuantity = existingHolding?.quantity ?? 0;
+  const isHoldingShort = Boolean(existingHolding?.is_short);
+  const ownedQuantity = isHoldingShort ? 0 : (existingHolding?.quantity ?? 0);
+  const shortQuantityHeld = isHoldingShort ? (existingHolding?.quantity ?? 0) : 0;
+
+  // Short selling & cover buy operation flags
+  const isShortSellOperation =
+    market === 'IN' &&
+    side === 'sell' &&
+    ((Number(quantity) || 0) > ownedQuantity || isHoldingShort);
+
+  const isCoverBuyOperation =
+    side === 'buy' && isHoldingShort;
 
   // Fetch resolved square-off date with in-memory caching and debouncing
   const fetchResolvedDate = useCallback((mkt, days) => {
@@ -99,7 +110,7 @@ export function OrderTicket({
   }, []);
 
   useEffect(() => {
-    if (side !== 'buy' || durationMode === 'none') {
+    if (side !== 'buy' || isCoverBuyOperation || durationMode === 'none') {
       setCalculatedSquareOff(null);
       return;
     }
@@ -121,11 +132,15 @@ export function OrderTicket({
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [side, durationMode, customDays, market, fetchResolvedDate]);
+  }, [side, isCoverBuyOperation, durationMode, customDays, market, fetchResolvedDate]);
 
   // Validation checks
   const hasInsufficientFunds = side === 'buy' && totalCost > cashBalance;
-  const hasInsufficientHoldings = side === 'sell' && (Number(quantity) || 0) > ownedQuantity;
+  const hasInsufficientMargin = isShortSellOperation && totalCost > cashBalance;
+  const hasInsufficientHoldings =
+    side === 'sell' &&
+    (Number(quantity) || 0) > ownedQuantity &&
+    (market === 'US' || orderType === 'stop_loss');
 
   async function handleOrderSubmit(e) {
     e.preventDefault();
@@ -170,10 +185,23 @@ export function OrderTicket({
       return;
     }
 
-    if (hasInsufficientHoldings) {
+    if (hasInsufficientMargin) {
       setErrorMsg(
-        `Insufficient holdings. You only own ${ownedQuantity} shares of ${upper}.`
+        `Insufficient margin. Opening this short position requires 1x cash margin of ${currencySymbol}${totalCost.toLocaleString()}, but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
       );
+      return;
+    }
+
+    if (hasInsufficientHoldings) {
+      if (market === 'US') {
+        setErrorMsg(
+          `Insufficient holdings. You only own ${ownedQuantity} shares of ${upper}. Short selling is not currently supported for US equities.`
+        );
+      } else {
+        setErrorMsg(
+          `Insufficient holdings. Stop-loss orders can only protect shares you currently hold (${ownedQuantity} shares).`
+        );
+      }
       return;
     }
 
@@ -190,7 +218,7 @@ export function OrderTicket({
         trigger_price: orderType === 'stop_loss' ? Number(triggerPrice) : null,
       };
 
-      if (side === 'buy' && durationMode !== 'none' && calculatedSquareOff) {
+      if (side === 'buy' && !isCoverBuyOperation && durationMode !== 'none' && calculatedSquareOff) {
         orderPayload.holding_days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
         orderPayload.square_off_date = calculatedSquareOff.square_off_date;
         orderPayload.is_intraday = durationMode === 'intraday';
@@ -208,7 +236,11 @@ export function OrderTicket({
         const reasons = {
           market_closed: 'Market is closed. Trading is only permitted during regular market hours.',
           insufficient_funds: `Insufficient funds in ${currency} wallet to complete this purchase.`,
+          insufficient_margin: `Insufficient cash balance to meet the 1x margin requirement for short selling.`,
           insufficient_holdings: `Insufficient holdings. You do not hold enough shares of ${upper} to sell.`,
+          intraday_only_for_short: `Short selling is intraday-only in Indian equities. Multi-day duration is not permitted.`,
+          us_short_not_supported: `Short selling is currently only supported for Indian markets (NSE/BSE). US shorting requires a margin account.`,
+          no_short_position: `No open short position to cover.`,
           invalid_ticker: `Invalid ticker symbol. Unable to fetch executable quote from exchange.`,
           wrong_market: `Ticker / wallet mismatch.`,
           stop_loss_sell_only: `Stop-loss orders can only be placed on the SELL side.`,
@@ -601,8 +633,32 @@ export function OrderTicket({
             </div>
           </div>
 
-          {/* Holding Duration Selector (BUY side only) */}
-          {side === 'buy' && (
+          {/* Short Sell Intraday Warning Banner */}
+          {isShortSellOperation && (
+            <div className="p-2.5 bg-accent/10 border border-accent/40 text-[11px] space-y-1 font-mono-tabular">
+              <div className="flex items-center space-x-1.5 font-bold text-accent">
+                <span>⚡ INTRADAY SHORT POSITION (NSE/BSE)</span>
+              </div>
+              <div className="text-[10px] text-text-muted leading-tight">
+                Short selling is strictly intraday on Indian equities. Auto squared-off at 15:15 IST before session close. 1x cash margin required.
+              </div>
+            </div>
+          )}
+
+          {/* Cover Buy Info Banner */}
+          {isCoverBuyOperation && (
+            <div className="p-2.5 bg-green/10 border border-green/40 text-[11px] space-y-1 font-mono-tabular">
+              <div className="flex items-center space-x-1.5 font-bold text-green">
+                <span>🛡️ COVER BUY (SQUARE-OFF SHORT)</span>
+              </div>
+              <div className="text-[10px] text-text-muted leading-tight">
+                You currently hold a SHORT position of {shortQuantityHeld} shares. This BUY order will buy back shares to close your short liability.
+              </div>
+            </div>
+          )}
+
+          {/* Holding Duration Selector (BUY side only, when not covering a short) */}
+          {side === 'buy' && !isCoverBuyOperation && (
             <div className="font-mono-tabular space-y-2">
               <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-wider">
                 <span>HOLDING DURATION</span>
@@ -717,7 +773,13 @@ export function OrderTicket({
             </div>
             <div className="flex justify-between text-text-muted border-t border-border/60 pt-1.5">
               <span className="font-medium text-text-primary">
-                {side === 'buy' ? 'EST. TOTAL COST:' : 'EST. PROCEEDS:'}
+                {isShortSellOperation
+                  ? 'SHORT SALE PROCEEDS (1X MARGIN):'
+                  : isCoverBuyOperation
+                  ? 'EST. COVER COST:'
+                  : side === 'buy'
+                  ? 'EST. TOTAL COST:'
+                  : 'EST. PROCEEDS:'}
               </span>
               <span className="font-semibold text-text-primary">
                 {currencySymbol}
@@ -727,10 +789,10 @@ export function OrderTicket({
                 })}
               </span>
             </div>
-            {side === 'buy' && (
+            {(side === 'buy' || isShortSellOperation) && (
               <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
                 <span>AVAILABLE CASH:</span>
-                <span className={hasInsufficientFunds ? 'text-red font-medium' : 'text-text-primary font-medium'}>
+                <span className={hasInsufficientFunds || hasInsufficientMargin ? 'text-red font-medium' : 'text-text-primary font-medium'}>
                   {currencySymbol}
                   {cashBalance.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
                     minimumFractionDigits: 2,
@@ -748,13 +810,18 @@ export function OrderTicket({
               submitting ||
               (orderType === 'market' && !isMarketOpen) ||
               hasInsufficientFunds ||
+              hasInsufficientMargin ||
               hasInsufficientHoldings
             }
             className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none ${
               orderType === 'market' && !isMarketOpen
                 ? 'bg-border text-text-muted cursor-not-allowed'
-                : hasInsufficientFunds || hasInsufficientHoldings
+                : hasInsufficientFunds || hasInsufficientMargin || hasInsufficientHoldings
                 ? 'bg-border text-text-muted cursor-not-allowed'
+                : isCoverBuyOperation
+                ? 'bg-green hover:bg-green/90 text-black disabled:opacity-50 disabled:cursor-not-allowed'
+                : isShortSellOperation
+                ? 'bg-red hover:bg-red/90 text-white disabled:opacity-50 disabled:cursor-not-allowed'
                 : side === 'buy'
                 ? 'bg-green hover:bg-green/90 text-black disabled:opacity-50 disabled:cursor-not-allowed'
                 : 'bg-red hover:bg-red/90 text-white disabled:opacity-50 disabled:cursor-not-allowed'
@@ -766,8 +833,14 @@ export function OrderTicket({
               ? 'MARKET CLOSED'
               : hasInsufficientFunds
               ? 'INSUFFICIENT FUNDS'
+              : hasInsufficientMargin
+              ? 'INSUFFICIENT MARGIN'
               : hasInsufficientHoldings
               ? 'INSUFFICIENT HOLDINGS'
+              : isCoverBuyOperation
+              ? `COVER BUY ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
+              : isShortSellOperation
+              ? `SHORT SELL ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
               : orderType === 'market'
               ? `${side.toUpperCase()} ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
               : orderType === 'limit'

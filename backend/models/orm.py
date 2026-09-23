@@ -89,6 +89,7 @@ class Holding(Base):
     avg_buy_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc, onupdate=_now_utc
     )
@@ -102,7 +103,7 @@ class Holding(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} sq_off={self.square_off_date}>"
+        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} short={self.is_short} sq_off={self.square_off_date}>"
 
 
 # ── HoldingLot (Tranche-based position tracking) ──────────────────────────────
@@ -122,6 +123,7 @@ class HoldingLot(Base):
     buy_price: Mapped[float] = mapped_column(Float, nullable=False)
     square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
@@ -129,7 +131,7 @@ class HoldingLot(Base):
     holding: Mapped[Holding] = relationship("Holding", back_populates="lots")
 
     def __repr__(self) -> str:
-        return f"<HoldingLot {self.id} qty={self.quantity} @ {self.buy_price} sq_off={self.square_off_date}>"
+        return f"<HoldingLot {self.id} qty={self.quantity} @ {self.buy_price} short={self.is_short} sq_off={self.square_off_date}>"
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ class Order(Base):
     status:           "pending" | "filled" | "rejected" | "cancelled"
     square_off_date:  target date for time-based auto square-off
     is_intraday:      True if order is an intraday position
+    is_short:         True if order is a short sale or cover buy
     triggered_by:     "user" | "auto_square_off" | "stop_loss"
     """
     __tablename__ = "orders"
@@ -164,6 +167,7 @@ class Order(Base):
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     triggered_by: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
@@ -176,7 +180,7 @@ class Order(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Order {self.side.upper()} {self.quantity}x {self.ticker} [{self.status}] sq_off={self.square_off_date}>"
+        return f"<Order {self.side.upper()} {self.quantity}x {self.ticker} [{self.status}] short={self.is_short} sq_off={self.square_off_date}>"
 
 
 # ── Transaction ───────────────────────────────────────────────────────────────
@@ -187,6 +191,7 @@ class Transaction(Base):
 
     total_value:         quantity × executed_price (always positive)
     cash_balance_after:  wallet.current_cash_balance after this transaction
+    is_short:            True if transaction relates to a short position
     triggered_by:        "auto_square_off" | None
     """
     __tablename__ = "transactions"
@@ -206,6 +211,7 @@ class Transaction(Base):
     cash_balance_after: Mapped[float] = mapped_column(Float, nullable=False)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     avg_buy_price: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     triggered_by: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc

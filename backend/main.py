@@ -51,6 +51,11 @@ if "transactions" in _inspector.get_table_names():
             _conn.execute(text("ALTER TABLE transactions ADD COLUMN triggered_by VARCHAR(30) DEFAULT NULL"))
             _conn.commit()
         logger.info("Migration applied: added 'triggered_by' column to transactions")
+    if "is_short" not in _existing_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE transactions ADD COLUMN is_short BOOLEAN DEFAULT 0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'is_short' column to transactions")
 
 if "orders" in _inspector.get_table_names():
     _order_cols = {c["name"] for c in _inspector.get_columns("orders")}
@@ -74,6 +79,11 @@ if "orders" in _inspector.get_table_names():
             _conn.execute(text("ALTER TABLE orders ADD COLUMN triggered_by VARCHAR(30) DEFAULT NULL"))
             _conn.commit()
         logger.info("Migration applied: added 'triggered_by' column to orders")
+    if "is_short" not in _order_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE orders ADD COLUMN is_short BOOLEAN DEFAULT 0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'is_short' column to orders")
 
 if "holdings" in _inspector.get_table_names():
     _holding_cols = {c["name"] for c in _inspector.get_columns("holdings")}
@@ -87,6 +97,19 @@ if "holdings" in _inspector.get_table_names():
             _conn.execute(text("ALTER TABLE holdings ADD COLUMN is_intraday BOOLEAN DEFAULT 0"))
             _conn.commit()
         logger.info("Migration applied: added 'is_intraday' column to holdings")
+    if "is_short" not in _holding_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE holdings ADD COLUMN is_short BOOLEAN DEFAULT 0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'is_short' column to holdings")
+
+if "holding_lots" in _inspector.get_table_names():
+    _lot_cols = {c["name"] for c in _inspector.get_columns("holding_lots")}
+    if "is_short" not in _lot_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE holding_lots ADD COLUMN is_short BOOLEAN DEFAULT 0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'is_short' column to holding_lots")
 
 if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.get_table_names():
     with engine.connect() as _conn:

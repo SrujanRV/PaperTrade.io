@@ -46,6 +46,7 @@ class HoldingLotOut(BaseModel):
     buy_price: float
     square_off_date: date | None = None
     is_intraday: bool = False
+    is_short: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -59,6 +60,7 @@ class HoldingOut(BaseModel):
     avg_buy_price: float
     square_off_date: date | None = None
     is_intraday: bool = False
+    is_short: bool = False
     square_off_quantity: float | None = None
     lots: list[HoldingLotOut] = []
     last_updated: datetime
@@ -96,6 +98,7 @@ class HoldingWithPnLOut(BaseModel):
     market_open: bool
     square_off_date: date | None = None
     is_intraday: bool = False
+    is_short: bool = False
     square_off_quantity: float | None = None
     lots: list[HoldingLotOut] = []
     price_error: str | None = None
@@ -175,6 +178,7 @@ class OrderOut(BaseModel):
     reject_reason: str | None = None
     square_off_date: date | None = None
     is_intraday: bool = False
+    is_short: bool = False
     triggered_by: str | None = None
     created_at: datetime
     executed_at: datetime | None = None
@@ -198,6 +202,7 @@ class TransactionOut(BaseModel):
     realized_pnl: float | None   # non-null for sell transactions
     avg_buy_price: float | None = None
     triggered_by: str | None = None
+    is_short: bool = False
     timestamp: datetime
 
     model_config = {"from_attributes": True}
@@ -218,6 +223,7 @@ class TradeOut(BaseModel):
     realized_pnl: float
     realized_pnl_percent: float
     triggered_by: str | None = None
+    is_short: bool = False
     timestamp: datetime
 
     model_config = {"from_attributes": True}

@@ -171,7 +171,7 @@ def get_trades(
 
     txns = (
         db.query(Transaction)
-        .filter(Transaction.wallet_id == wallet.id, Transaction.side == "sell")
+        .filter(Transaction.wallet_id == wallet.id, Transaction.realized_pnl.isnot(None))
         .order_by(Transaction.timestamp.desc())
         .all()
     )
@@ -180,14 +180,27 @@ def get_trades(
     for t in txns:
         pnl = t.realized_pnl or 0.0
         qty = t.quantity or 1.0
-        sell_p = t.price
-        buy_p = (
-            t.avg_buy_price
-            if t.avg_buy_price is not None
-            else round(sell_p - (pnl / qty), 4)
-        )
-        cost = buy_p * qty
-        pnl_pct = round((pnl / cost) * 100, 2) if cost > 0 else 0.0
+        is_short = bool(t.is_short)
+
+        if is_short:
+            # Short cover: closing transaction is side="buy"
+            buy_p = t.price  # cover purchase price
+            sell_p = (
+                t.avg_buy_price
+                if t.avg_buy_price is not None
+                else round(buy_p + (pnl / qty), 4)
+            )  # entry short sale price
+            basis = sell_p * qty
+            pnl_pct = round((pnl / basis) * 100, 2) if basis > 0 else 0.0
+        else:
+            sell_p = t.price
+            buy_p = (
+                t.avg_buy_price
+                if t.avg_buy_price is not None
+                else round(sell_p - (pnl / qty), 4)
+            )
+            cost = buy_p * qty
+            pnl_pct = round((pnl / cost) * 100, 2) if cost > 0 else 0.0
 
         trades.append(
             TradeOut(
@@ -202,6 +215,7 @@ def get_trades(
                 realized_pnl=pnl,
                 realized_pnl_percent=pnl_pct,
                 triggered_by=t.triggered_by,
+                is_short=is_short,
                 timestamp=t.timestamp,
             )
         )
