@@ -16,7 +16,8 @@ import winreg
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
-VENV_PYTHON = os.path.join(BACKEND_DIR, "venv", "Scripts", "python.exe")
+VENV_PYTHONW = os.path.join(BACKEND_DIR, "venv", "Scripts", "pythonw.exe")
+RUN_SERVER_SCRIPT = os.path.join(BACKEND_DIR, "run_server.py")
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "browser_config.json")
 ICON_PATH = os.path.join(PROJECT_ROOT, "resources", "app_icon.ico")
 HEALTH_URL = "http://127.0.0.1:8000/api/health"
@@ -261,14 +262,17 @@ def resolve_browser(force_prompt=False, prompt_gui=True):
 
 
 def open_browser(url, browser_path=None):
-    """Open specified browser executable or fallback to default."""
+    """Open specified browser directly without triggering cmd.exe or console windows."""
     if browser_path and os.path.isfile(browser_path):
         try:
-            subprocess.Popen([browser_path, url], creationflags=0x00000008 | 0x08000000)
+            subprocess.Popen([browser_path, url], creationflags=0x08000000 | 0x00000008)
             return
         except Exception:
             pass
-    webbrowser.open(url)
+    try:
+        os.startfile(url)
+    except Exception:
+        webbrowser.open(url)
 
 
 def launch(open_browser_window=True, exit_on_complete=False, force_browser_select=False, prompt_gui=True):
@@ -286,8 +290,8 @@ def launch(open_browser_window=True, exit_on_complete=False, force_browser_selec
             sys.exit(0)
         return True
 
-    # 2. Server not running — start it in the background silently
-    python_bin = VENV_PYTHON if os.path.isfile(VENV_PYTHON) else sys.executable
+    # 2. Server not running — start it in the background silently using pythonw.exe
+    python_bin = VENV_PYTHONW if os.path.isfile(VENV_PYTHONW) else sys.executable
 
     # Detached, windowless, breakaway from job
     DETACHED_PROCESS = 0x00000008
@@ -296,7 +300,7 @@ def launch(open_browser_window=True, exit_on_complete=False, force_browser_selec
     CREATE_BREAKAWAY_FROM_JOB = 0x01000000
     creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
 
-    cmd = [python_bin, "-m", "uvicorn", "main:app", "--port", "8000"]
+    cmd = [python_bin, RUN_SERVER_SCRIPT]
     log_path = os.path.join(BACKEND_DIR, "server.log")
 
     try:
