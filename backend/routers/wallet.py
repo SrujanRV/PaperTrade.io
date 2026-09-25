@@ -136,6 +136,8 @@ def wallet_summary(
         currency=summary.currency,
         cash_balance=summary.cash_balance,
         starting_balance=summary.starting_balance,
+        margin_used=summary.margin_used,
+        available_buying_power=summary.available_buying_power,
         holdings=[
             HoldingWithPnLOut(**dataclasses.asdict(h))
             for h in summary.holdings

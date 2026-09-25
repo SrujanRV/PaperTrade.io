@@ -403,28 +403,58 @@ def _execute_short_sell(
     order_type: str = "market",
     requested_price: float | None = None,
     trigger_price: float | None = None,
+    square_off_date: date | None = None,
+    is_intraday: bool = False,
     triggered_by: str | None = None,
     existing_order: Order | None = None,
 ) -> Order:
-    # 1. 1x Cash Margin check: wallet.current_cash_balance >= price * quantity
-    required_margin = round(price * quantity, 2)
-    if wallet.current_cash_balance < required_margin:
-        return _persist_rejected(
-            db, wallet.id, ticker, "sell", quantity, "insufficient_margin",
-            order_type=order_type, requested_price=requested_price,
-            trigger_price=trigger_price, is_short=True, existing_order=existing_order,
-        )
+    is_us = (wallet.market == "US")
+    proceeds = round(price * quantity, 2)
+
+    # 1. Margin requirement check
+    if is_us:
+        # Reg T initial margin requirement: 150% of position value, checked against available buying power
+        required_margin = round(1.5 * price * quantity, 2)
+        if wallet.available_buying_power < required_margin:
+            return _persist_rejected(
+                db, wallet.id, ticker, "sell", quantity, "insufficient_margin",
+                order_type=order_type, requested_price=requested_price,
+                trigger_price=trigger_price, is_short=True, existing_order=existing_order,
+            )
+        margin_to_lock = required_margin
+    else:
+        # IN market: 1x cash check (unchanged)
+        required_margin = proceeds
+        if wallet.current_cash_balance < required_margin:
+            return _persist_rejected(
+                db, wallet.id, ticker, "sell", quantity, "insufficient_margin",
+                order_type=order_type, requested_price=requested_price,
+                trigger_price=trigger_price, is_short=True, existing_order=existing_order,
+            )
+        margin_to_lock = 0.0
 
     # 2. Credit proceeds to cash balance
-    wallet.current_cash_balance = round(wallet.current_cash_balance + required_margin, 2)
+    wallet.current_cash_balance = round(wallet.current_cash_balance + proceeds, 2)
 
-    # 3. Market date (intraday only)
-    exchange = "NSE" if wallet.market == "IN" else "NASDAQ"
-    session_info = MARKET_SESSIONS.get(exchange)
-    tz = session_info["tz"] if session_info else None
-    market_today = datetime.now(tz=tz).date() if tz else date.today()
+    # 3. Lock collateral into margin_used for US
+    if margin_to_lock > 0:
+        wallet.margin_used = round((wallet.margin_used or 0.0) + margin_to_lock, 2)
 
-    # 4. Upsert short holding
+    # 4. Market date & duration
+    if wallet.market == "IN":
+        # IN shorts are strictly intraday
+        exchange = "NSE"
+        session_info = MARKET_SESSIONS.get(exchange)
+        tz = session_info["tz"] if session_info else None
+        market_today = datetime.now(tz=tz).date() if tz else date.today()
+        effective_sq_date = market_today
+        effective_intraday = True
+    else:
+        # US shorts can be held overnight / multi-day
+        effective_sq_date = square_off_date
+        effective_intraday = is_intraday
+
+    # 5. Upsert short holding
     holding = (
         db.query(Holding)
         .filter(Holding.wallet_id == wallet.id, Holding.ticker == ticker, Holding.is_short == True)
@@ -436,42 +466,47 @@ def _execute_short_sell(
             (holding.quantity * holding.avg_buy_price + quantity * price) / new_qty, 6
         )
         holding.quantity = round(new_qty, 8)
-        holding.square_off_date = market_today
-        holding.is_intraday = True
+        holding.margin_locked = round((holding.margin_locked or 0.0) + margin_to_lock, 2)
+        if effective_sq_date is not None:
+            if holding.square_off_date is None or effective_sq_date < holding.square_off_date:
+                holding.square_off_date = effective_sq_date
+                holding.is_intraday = effective_intraday
     else:
         holding = Holding(
             wallet_id=wallet.id,
             ticker=ticker,
             quantity=round(quantity, 8),
             avg_buy_price=round(price, 6),
-            square_off_date=market_today,
-            is_intraday=True,
+            square_off_date=effective_sq_date,
+            is_intraday=effective_intraday,
             is_short=True,
+            margin_locked=margin_to_lock,
         )
         db.add(holding)
         db.flush()
 
-    # 5. Add short lot
+    # 6. Add short lot
     lot = HoldingLot(
         holding_id=holding.id,
         quantity=round(quantity, 8),
         buy_price=round(price, 6),
-        square_off_date=market_today,
-        is_intraday=True,
+        square_off_date=effective_sq_date,
+        is_intraday=effective_intraday,
         is_short=True,
+        margin_locked=margin_to_lock,
         created_at=_now_utc(),
     )
     db.add(lot)
     db.flush()
 
-    # 6. Create or update Order
+    # 7. Create or update Order
     if existing_order:
         existing_order.executed_price = price
         existing_order.status = "filled"
         existing_order.executed_at = _now_utc()
         existing_order.is_short = True
-        existing_order.is_intraday = True
-        existing_order.square_off_date = market_today
+        existing_order.is_intraday = effective_intraday
+        existing_order.square_off_date = effective_sq_date
         if triggered_by:
             existing_order.triggered_by = triggered_by
         order = existing_order
@@ -487,8 +522,8 @@ def _execute_short_sell(
             executed_price=price,
             status="filled",
             is_short=True,
-            is_intraday=True,
-            square_off_date=market_today,
+            is_intraday=effective_intraday,
+            square_off_date=effective_sq_date,
             triggered_by=triggered_by,
             created_at=_now_utc(),
             executed_at=_now_utc(),
@@ -497,7 +532,7 @@ def _execute_short_sell(
 
     db.flush()
 
-    # 7. Ledger transaction
+    # 8. Ledger transaction
     txn = Transaction(
         wallet_id=wallet.id,
         order_id=order.id,
@@ -505,7 +540,7 @@ def _execute_short_sell(
         side="sell",
         quantity=quantity,
         price=price,
-        total_value=required_margin,
+        total_value=proceeds,
         cash_balance_after=wallet.current_cash_balance,
         realized_pnl=None,
         avg_buy_price=round(holding.avg_buy_price, 6),
@@ -518,9 +553,9 @@ def _execute_short_sell(
     db.refresh(order)
 
     logger.info(
-        "%s SHORT SELL filled: %s ×%s @ %.4f proceeds=%s %.2f | cash_after=%.2f",
-        order_type.upper(), ticker, quantity, price, wallet.currency, required_margin,
-        wallet.current_cash_balance,
+        "%s SHORT SELL filled: %s ×%s @ %.4f proceeds=%s %.2f margin_locked=%.2f | cash_after=%.2f margin_used=%.2f bp=%.2f",
+        order_type.upper(), ticker, quantity, price, wallet.currency, proceeds, margin_to_lock,
+        wallet.current_cash_balance, wallet.margin_used, wallet.available_buying_power,
     )
     return order
 
@@ -554,8 +589,8 @@ def _execute_cover_buy(
     cover_qty = min(quantity, holding.quantity)
     total_cost = round(price * cover_qty, 2)
 
-    # Cash check for buy-back cost
-    if wallet.current_cash_balance < total_cost:
+    # Cash check for buy-back cost (except margin-call liquidation where broker force-covers)
+    if triggered_by != "margin_call_liquidation" and wallet.current_cash_balance < total_cost:
         return _persist_rejected(
             db, wallet.id, ticker, "buy", quantity, "insufficient_funds",
             order_type=order_type, requested_price=requested_price,
@@ -575,6 +610,7 @@ def _execute_cover_buy(
     rem = cover_qty
     total_realized_pnl = 0.0
     weighted_entry_sum = 0.0
+    total_margin_released = 0.0
 
     for lot in lots:
         if rem <= 1e-9:
@@ -584,6 +620,17 @@ def _execute_cover_buy(
         lot_pnl = (lot.buy_price - price) * deduct
         total_realized_pnl += lot_pnl
         weighted_entry_sum += lot.buy_price * deduct
+
+        # Release locked margin proportionally from this lot
+        lot_margin = lot.margin_locked or 0.0
+        if lot_margin > 0 and lot.quantity > 0:
+            if lot.quantity <= deduct + 1e-9:
+                rel = lot_margin
+            else:
+                rel = round(lot_margin * (deduct / lot.quantity), 2)
+            total_margin_released += rel
+            lot.margin_locked = max(0.0, round(lot.margin_locked - rel, 2))
+
         rem = round(rem - deduct, 8)
         if lot.quantity <= deduct + 1e-9:
             db.delete(lot)
@@ -593,9 +640,17 @@ def _execute_cover_buy(
     effective_entry_price = round(weighted_entry_sum / cover_qty, 6) if cover_qty > 0 else holding.avg_buy_price
     total_realized_pnl = round(total_realized_pnl, 6)
 
+    # Release margin from wallet and holding
+    if total_margin_released > 0:
+        wallet.margin_used = max(0.0, round((wallet.margin_used or 0.0) - total_margin_released, 2))
+        holding.margin_locked = max(0.0, round((holding.margin_locked or 0.0) - total_margin_released, 2))
+
     # Reduce / close short holding
     remaining_holding = round(holding.quantity - cover_qty, 8)
     if remaining_holding <= 1e-9:
+        if (holding.margin_locked or 0.0) > 0:
+            wallet.margin_used = max(0.0, round((wallet.margin_used or 0.0) - holding.margin_locked, 2))
+            holding.margin_locked = 0.0
         db.delete(holding)
     else:
         holding.quantity = remaining_holding
@@ -609,6 +664,7 @@ def _execute_cover_buy(
             holding.avg_buy_price = round(
                 sum(l.buy_price * l.quantity for l in remaining_lots) / tot_qty, 6
             )
+            holding.margin_locked = round(sum(l.margin_locked or 0.0 for l in remaining_lots), 2)
     db.flush()
 
     # Create or update Order
@@ -661,22 +717,25 @@ def _execute_cover_buy(
     db.refresh(order)
 
     logger.info(
-        "%s COVER BUY filled: %s ×%s @ %.4f cost=%s %.2f realized_pnl=%.4f by=%s | cash_after=%.2f",
+        "%s COVER BUY filled: %s ×%s @ %.4f cost=%s %.2f realized_pnl=%.4f margin_rel=%.2f by=%s | cash_after=%.2f margin_used=%.2f bp=%.2f",
         order_type.upper(), ticker, cover_qty, price, wallet.currency, total_cost,
-        total_realized_pnl, triggered_by, wallet.current_cash_balance,
+        total_realized_pnl, total_margin_released, triggered_by, wallet.current_cash_balance,
+        wallet.margin_used, wallet.available_buying_power,
     )
 
     # If user wanted to buy more than short quantity, the excess opens a regular long position!
-    excess_long = round(quantity - cover_qty, 8)
-    if excess_long > 1e-9:
-        _execute_buy(
-            db=db,
-            wallet=wallet,
-            ticker=ticker,
-            quantity=excess_long,
-            price=price,
-            order_type=order_type,
-        )
+    # (Only for manual user orders, not automated liquidations)
+    if triggered_by != "margin_call_liquidation":
+        excess_long = round(quantity - cover_qty, 8)
+        if excess_long > 1e-9:
+            _execute_buy(
+                db=db,
+                wallet=wallet,
+                ticker=ticker,
+                quantity=excess_long,
+                price=price,
+                order_type=order_type,
+            )
 
     return order
 
@@ -709,24 +768,23 @@ def place_order(
     if order_type not in ("market", "limit", "stop_loss"):
         raise ValueError(f"Invalid order_type: {order_type!r}")
 
-    # ── Resolve square-off date for BUY orders ────────────────────────────────
+    # ── Resolve square-off date ──────────────────────────────────────────────
     parsed_sq_date: date | None = None
-    if side == "buy":
-        if square_off_date:
-            if isinstance(square_off_date, date):
-                parsed_sq_date = square_off_date
-            elif isinstance(square_off_date, str) and square_off_date.strip():
-                try:
-                    parsed_sq_date = date.fromisoformat(square_off_date.strip())
-                except ValueError:
-                    parsed_sq_date = None
-        elif holding_days is not None:
-            calc = calculate_square_off_date(market, holding_days=holding_days)
-            parsed_sq_date = date.fromisoformat(calc["square_off_date"])
-            is_intraday = calc["is_intraday"]
-        elif is_intraday:
-            calc = calculate_square_off_date(market, holding_days=0)
-            parsed_sq_date = date.fromisoformat(calc["square_off_date"])
+    if square_off_date:
+        if isinstance(square_off_date, date):
+            parsed_sq_date = square_off_date
+        elif isinstance(square_off_date, str) and square_off_date.strip():
+            try:
+                parsed_sq_date = date.fromisoformat(square_off_date.strip())
+            except ValueError:
+                parsed_sq_date = None
+    elif holding_days is not None:
+        calc = calculate_square_off_date(market, holding_days=holding_days)
+        parsed_sq_date = date.fromisoformat(calc["square_off_date"])
+        is_intraday = calc["is_intraday"]
+    elif is_intraday:
+        calc = calculate_square_off_date(market, holding_days=0)
+        parsed_sq_date = date.fromisoformat(calc["square_off_date"])
 
     # ── Wallet lookup ──────────────────────────────────────────────────────────
     wallet = db.query(Wallet).filter(Wallet.market == market).first()
@@ -785,61 +843,60 @@ def place_order(
                 if quantity <= holding.quantity + 1e-9:
                     return _execute_sell(db, wallet, ticker, quantity, quote.price, order_type="market")
                 else:
-                    # Selling more than currently held long
-                    if market == "US":
-                        return _persist_rejected(
-                            db, wallet.id, ticker, "sell", quantity, "insufficient_holdings",
-                            order_type="market",
-                        )
-                    # Indian market short portion duration check (must be intraday)
-                    if (holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday):
+                    # Selling more than currently held long -> Split operation
+                    if market == "IN" and ((holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday)):
                         return _persist_rejected(
                             db, wallet.id, ticker, "sell", quantity, "intraday_only_for_short",
                             order_type="market",
                         )
-                    # Split operation:
+
                     # 1. Close existing long position normally
                     long_qty = holding.quantity
                     short_qty = round(quantity - long_qty, 8)
                     _execute_sell(db, wallet, ticker, long_qty, quote.price, order_type="market")
 
                     # 2. Check margin for the excess short portion
-                    if wallet.current_cash_balance < round(quote.price * short_qty, 2):
-                        return _persist_rejected(
-                            db, wallet.id, ticker, "sell", short_qty, "insufficient_margin",
-                            order_type="market", is_short=True,
-                        )
+                    if market == "US":
+                        required_margin = round(1.5 * quote.price * short_qty, 2)
+                        if wallet.available_buying_power < required_margin:
+                            return _persist_rejected(
+                                db, wallet.id, ticker, "sell", short_qty, "insufficient_margin",
+                                order_type="market", is_short=True,
+                            )
+                    else:
+                        if wallet.current_cash_balance < round(quote.price * short_qty, 2):
+                            return _persist_rejected(
+                                db, wallet.id, ticker, "sell", short_qty, "insufficient_margin",
+                                order_type="market", is_short=True,
+                            )
 
                     # 3. Open new short position with the excess
                     return _execute_short_sell(
                         db, wallet, ticker, short_qty, quote.price, order_type="market",
+                        square_off_date=parsed_sq_date, is_intraday=is_intraday,
                     )
             elif holding and holding.is_short:
                 # Adding to existing short position
-                if market == "US":
-                    return _persist_rejected(
-                        db, wallet.id, ticker, "sell", quantity, "us_short_not_supported",
-                        order_type="market", is_short=True,
-                    )
-                if (holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday):
+                if market == "IN" and ((holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday)):
                     return _persist_rejected(
                         db, wallet.id, ticker, "sell", quantity, "intraday_only_for_short",
                         order_type="market", is_short=True,
                     )
-                return _execute_short_sell(db, wallet, ticker, quantity, quote.price, order_type="market")
+                return _execute_short_sell(
+                    db, wallet, ticker, quantity, quote.price, order_type="market",
+                    square_off_date=parsed_sq_date, is_intraday=is_intraday,
+                )
             else:
                 # No holding at all -> Open short position
-                if market == "US":
-                    return _persist_rejected(
-                        db, wallet.id, ticker, "sell", quantity, "us_short_not_supported",
-                        order_type="market", is_short=True,
-                    )
-                if (holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday):
+                if market == "IN" and ((holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday)):
                     return _persist_rejected(
                         db, wallet.id, ticker, "sell", quantity, "intraday_only_for_short",
                         order_type="market", is_short=True,
                     )
-                return _execute_short_sell(db, wallet, ticker, quantity, quote.price, order_type="market")
+                return _execute_short_sell(
+                    db, wallet, ticker, quantity, quote.price, order_type="market",
+                    square_off_date=parsed_sq_date, is_intraday=is_intraday,
+                )
 
     # ── 2. LIMIT ORDER ────────────────────────────────────────────────────────
     if order_type == "limit":
@@ -916,12 +973,7 @@ def place_order(
         else:  # side == "sell"
             if holding and not holding.is_short:
                 if holding.quantity < quantity - 1e-9:
-                    if market == "US":
-                        return _persist_rejected(
-                            db, wallet.id, ticker, side, quantity, "insufficient_holdings",
-                            order_type="limit", requested_price=limit_price,
-                        )
-                    if (holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday):
+                    if market == "IN" and ((holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday)):
                         return _persist_rejected(
                             db, wallet.id, ticker, side, quantity, "intraday_only_for_short",
                             order_type="limit", requested_price=limit_price,
@@ -932,6 +984,7 @@ def place_order(
                         _execute_sell(db, wallet, ticker, long_qty, quote.price, order_type="limit", requested_price=limit_price)
                         return _execute_short_sell(
                             db, wallet, ticker, short_qty, quote.price, order_type="limit", requested_price=limit_price,
+                            square_off_date=parsed_sq_date, is_intraday=is_intraday,
                         )
                     return _persist_rejected(
                         db, wallet.id, ticker, side, quantity, "insufficient_holdings",
@@ -960,25 +1013,29 @@ def place_order(
                     return pending_order
             else:
                 # Short limit sell (no holding or existing short holding)
-                if market == "US":
-                    return _persist_rejected(
-                        db, wallet.id, ticker, side, quantity, "us_short_not_supported",
-                        order_type="limit", requested_price=limit_price, is_short=True,
-                    )
-                if (holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday):
+                if market == "IN" and ((holding_days is not None and holding_days > 0) or (square_off_date and not is_intraday)):
                     return _persist_rejected(
                         db, wallet.id, ticker, side, quantity, "intraday_only_for_short",
                         order_type="limit", requested_price=limit_price, is_short=True,
                     )
-                if wallet.current_cash_balance < round(limit_price * quantity, 2):
-                    return _persist_rejected(
-                        db, wallet.id, ticker, side, quantity, "insufficient_margin",
-                        order_type="limit", requested_price=limit_price, is_short=True,
-                    )
+                if market == "US":
+                    req_margin = round(1.5 * limit_price * quantity, 2)
+                    if wallet.available_buying_power < req_margin:
+                        return _persist_rejected(
+                            db, wallet.id, ticker, side, quantity, "insufficient_margin",
+                            order_type="limit", requested_price=limit_price, is_short=True,
+                        )
+                else:
+                    if wallet.current_cash_balance < round(limit_price * quantity, 2):
+                        return _persist_rejected(
+                            db, wallet.id, ticker, side, quantity, "insufficient_margin",
+                            order_type="limit", requested_price=limit_price, is_short=True,
+                        )
                 if quote.market_open and quote.price >= limit_price:
                     return _execute_short_sell(
                         db, wallet, ticker, quantity, quote.price,
                         order_type="limit", requested_price=limit_price,
+                        square_off_date=parsed_sq_date, is_intraday=is_intraday,
                     )
                 pending_order = Order(
                     wallet_id=wallet.id,
@@ -988,7 +1045,8 @@ def place_order(
                     quantity=quantity,
                     requested_price=limit_price,
                     is_short=True,
-                    is_intraday=True,
+                    is_intraday=is_intraday,
+                    square_off_date=parsed_sq_date,
                     status="pending",
                     created_at=_now_utc(),
                 )
@@ -1277,6 +1335,12 @@ def evaluate_auto_square_off(
                 .all()
             )
             for sh in short_holdings:
+                # For US market: only square off if intraday or timed lot due today
+                if m == "US":
+                    is_due = bool(sh.is_intraday) or (sh.square_off_date is not None and sh.square_off_date <= market_today)
+                    if not is_due:
+                        continue
+
                 ticker = sh.ticker.upper()
                 quote = quote_map.get(ticker)
                 if not quote:
@@ -1388,4 +1452,83 @@ def evaluate_auto_square_off(
                 executed_orders.append(sell_order)
 
     return executed_orders
+
+
+# ── Margin Call Evaluation & Liquidation ──────────────────────────────────────
+
+def evaluate_margin_calls(
+    db: Session,
+    quotes: list[PriceQuote] | dict[str, PriceQuote] | None = None,
+) -> list[Order]:
+    """
+    Evaluates open US short positions against current market prices for maintenance margin breaches.
+
+    Rules:
+    - US market only.
+    - Initial margin is 150%, maintenance margin threshold is 125% of current market value.
+    - Ratio: margin_locked / (current_price * holding.quantity) < 1.25
+      (equivalently: current_price > (holding.margin_locked / (1.25 * holding.quantity)))
+    - When triggered on a holding (even with multiple lots at different entry prices),
+      liquidates the ENTIRE short position for that ticker in strict FIFO order,
+      releasing all locked margin and recording realized P&L per lot against its specific entry price.
+    - Cover-buy order and transaction are marked with triggered_by="margin_call_liquidation".
+    """
+    quote_map: dict[str, PriceQuote] = {}
+    if quotes:
+        if isinstance(quotes, dict):
+            quote_map = {k.upper(): v for k, v in quotes.items()}
+        elif isinstance(quotes, list):
+            quote_map = {q.symbol.upper(): q for q in quotes}
+
+    us_wallet = db.query(Wallet).filter(Wallet.market == "US").first()
+    if not us_wallet:
+        return []
+
+    short_holdings = (
+        db.query(Holding)
+        .filter(Holding.wallet_id == us_wallet.id, Holding.is_short == True, Holding.quantity > 0)
+        .all()
+    )
+    if not short_holdings:
+        return []
+
+    liquidated_orders: list[Order] = []
+
+    for holding in short_holdings:
+        ticker = holding.ticker.upper()
+        quote = quote_map.get(ticker)
+        if not quote:
+            quote = get_quote(ticker)
+            quote_map[ticker] = quote
+
+        if not quote or quote.error or quote.price <= 0:
+            continue
+
+        curr_price = quote.price
+        current_value = curr_price * holding.quantity
+        if current_value <= 0:
+            continue
+
+        margin_locked = holding.margin_locked or 0.0
+        margin_ratio = margin_locked / current_value
+
+        # Breach when margin_ratio < 1.25 (i.e. < 125% maintenance margin)
+        if margin_ratio < 1.25 - 1e-9:
+            logger.warning(
+                "MARGIN CALL LIQUIDATION triggered for %s: margin_locked=%.2f, curr_val=%.2f, ratio=%.4f (< 1.25) @ price=%.4f",
+                ticker, margin_locked, current_value, margin_ratio, curr_price,
+            )
+            # Liquidate the ENTIRE short position for that ticker
+            cover_order = _execute_cover_buy(
+                db=db,
+                wallet=us_wallet,
+                ticker=ticker,
+                quantity=holding.quantity,
+                price=curr_price,
+                order_type="market",
+                triggered_by="margin_call_liquidation",
+            )
+            liquidated_orders.append(cover_order)
+
+    return liquidated_orders
 

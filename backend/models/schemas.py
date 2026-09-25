@@ -47,6 +47,7 @@ class HoldingLotOut(BaseModel):
     square_off_date: date | None = None
     is_intraday: bool = False
     is_short: bool = False
+    margin_locked: float = 0.0
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -61,6 +62,7 @@ class HoldingOut(BaseModel):
     square_off_date: date | None = None
     is_intraday: bool = False
     is_short: bool = False
+    margin_locked: float = 0.0
     square_off_quantity: float | None = None
     lots: list[HoldingLotOut] = []
     last_updated: datetime
@@ -75,6 +77,8 @@ class WalletOut(BaseModel):
     currency: str
     starting_balance: float
     current_cash_balance: float
+    margin_used: float = 0.0
+    available_buying_power: float = 0.0
     created_at: datetime
     holdings: list[HoldingOut] = []
 
@@ -99,6 +103,11 @@ class HoldingWithPnLOut(BaseModel):
     square_off_date: date | None = None
     is_intraday: bool = False
     is_short: bool = False
+    margin_locked: float | None = None
+    maintenance_margin_required: float | None = None
+    margin_level_pct: float | None = None
+    liquidation_price: float | None = None
+    distance_to_margin_call_pct: float | None = None
     square_off_quantity: float | None = None
     lots: list[HoldingLotOut] = []
     price_error: str | None = None
@@ -111,6 +120,8 @@ class WalletSummaryOut(BaseModel):
     currency: str
     cash_balance: float
     starting_balance: float
+    margin_used: float = 0.0
+    available_buying_power: float = 0.0
     holdings: list[HoldingWithPnLOut] = []
     total_holdings_value: float
     total_wallet_value: float      # cash + holdings value

@@ -101,7 +101,11 @@ if "holdings" in _inspector.get_table_names():
         with engine.connect() as _conn:
             _conn.execute(text("ALTER TABLE holdings ADD COLUMN is_short BOOLEAN DEFAULT 0"))
             _conn.commit()
-        logger.info("Migration applied: added 'is_short' column to holdings")
+    if "margin_locked" not in _holding_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE holdings ADD COLUMN margin_locked FLOAT DEFAULT 0.0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'margin_locked' column to holdings")
 
 if "holding_lots" in _inspector.get_table_names():
     _lot_cols = {c["name"] for c in _inspector.get_columns("holding_lots")}
@@ -110,6 +114,19 @@ if "holding_lots" in _inspector.get_table_names():
             _conn.execute(text("ALTER TABLE holding_lots ADD COLUMN is_short BOOLEAN DEFAULT 0"))
             _conn.commit()
         logger.info("Migration applied: added 'is_short' column to holding_lots")
+    if "margin_locked" not in _lot_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE holding_lots ADD COLUMN margin_locked FLOAT DEFAULT 0.0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'margin_locked' column to holding_lots")
+
+if "wallets" in _inspector.get_table_names():
+    _wallet_cols = {c["name"] for c in _inspector.get_columns("wallets")}
+    if "margin_used" not in _wallet_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE wallets ADD COLUMN margin_used FLOAT DEFAULT 0.0"))
+            _conn.commit()
+        logger.info("Migration applied: added 'margin_used' column to wallets")
 
 if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.get_table_names():
     with engine.connect() as _conn:

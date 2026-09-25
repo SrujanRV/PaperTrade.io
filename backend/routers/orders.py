@@ -21,10 +21,12 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.orm import Order, Wallet
 from models.schemas import OrderOut, OrderRequest
+from services.price_feed import PriceQuote
 from services.order_engine import (
     cancel_pending_order,
     evaluate_pending_orders,
     evaluate_auto_square_off,
+    evaluate_margin_calls,
     place_order,
 )
 from services.trading_calendar import calculate_square_off_date
@@ -114,6 +116,42 @@ def trigger_square_off_evaluation(
     db: Session = Depends(get_db),
 ) -> list[OrderOut]:
     executed = evaluate_auto_square_off(db=db, force_time_check=True, market_filter=market)
+    return [OrderOut.model_validate(o) for o in executed]
+
+
+# ── POST /api/orders/trigger-margin-calls ─────────────────────────────────────
+
+@router.post(
+    "/trigger-margin-calls",
+    response_model=list[OrderOut],
+    summary="Trigger margin call evaluation for US shorts",
+    description="Evaluates US short positions against current prices and liquidates positions breaching the 125% maintenance margin threshold.",
+)
+def trigger_margin_calls_endpoint(
+    ticker: str | None = Query(None, description="Optional ticker to test with force_price"),
+    force_price: float | None = Query(None, description="Optional simulated price for testing margin call breach"),
+    db: Session = Depends(get_db),
+) -> list[OrderOut]:
+    quotes = None
+    if ticker and force_price is not None:
+        quotes = [
+            PriceQuote(
+                symbol=ticker.upper(),
+                display_name=ticker.upper(),
+                exchange="NASDAQ",
+                currency="USD",
+                price=force_price,
+                prev_close=force_price,
+                change=0.0,
+                change_pct=0.0,
+                day_high=force_price,
+                day_low=force_price,
+                volume=100000,
+                market_open=True,
+                timestamp="2026-09-25T16:00:00Z",
+            )
+        ]
+    executed = evaluate_margin_calls(db=db, quotes=quotes)
     return [OrderOut.model_validate(o) for o in executed]
 
 

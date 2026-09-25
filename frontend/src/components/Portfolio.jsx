@@ -88,12 +88,29 @@ export function Portfolio({
     totalHoldingsValue += currentValue;
     totalUnrealizedPnL += unrealizedPnL;
 
+    let liveMarginLevelPct = h.margin_level_pct;
+    let liveDistancePct = h.distance_to_margin_call_pct;
+    let liveMaintenanceReq = h.maintenance_margin_required;
+    let liveLiquidationPrice = h.liquidation_price;
+
+    if (isShort && selectedMarket === 'US' && h.margin_locked && currentPrice > 0) {
+      const currPosVal = currentPrice * h.quantity;
+      liveMaintenanceReq = Number((1.25 * currPosVal).toFixed(2));
+      liveMarginLevelPct = Number(((h.margin_locked / currPosVal) * 100).toFixed(1));
+      liveLiquidationPrice = Number((h.margin_locked / (1.25 * h.quantity)).toFixed(2));
+      liveDistancePct = Number((((liveLiquidationPrice - currentPrice) / currentPrice) * 100).toFixed(1));
+    }
+
     return {
       ...h,
       current_price: currentPrice,
       current_value: currentValue,
       unrealized_pnl: unrealizedPnL,
       unrealized_pnl_pct: unrealizedPnLPct,
+      margin_level_pct: liveMarginLevelPct,
+      distance_to_margin_call_pct: liveDistancePct,
+      maintenance_margin_required: liveMaintenanceReq,
+      liquidation_price: liveLiquidationPrice,
       tickDirection: liveQuote?.tickDirection || 'none',
       tickId: liveQuote?.tickId || 0,
     };
@@ -157,16 +174,24 @@ export function Portfolio({
           </div>
         </div>
 
-        {/* Available Cash */}
+        {/* Available Cash & Buying Power */}
         <div className="p-3 bg-surface border border-border">
           <div className="text-[10px] text-text-muted uppercase font-sans tracking-wider">
-            Available Cash
+            {selectedMarket === 'US' && (summary?.margin_used || 0) > 0 ? 'Cash / Buying Power' : 'Available Cash'}
           </div>
           <div className="text-base font-semibold text-text-primary mt-1">
             {summary ? `${currencySymbol}${formatMoney(cashBalance, currency)}` : '—'}
           </div>
           <div className="text-[10px] text-text-muted mt-0.5">
-            {summary ? 'Ready to trade' : 'No balance set'}
+            {selectedMarket === 'US' && (summary?.margin_used || 0) > 0 ? (
+              <span className="text-accent font-semibold">
+                BUYING POWER: ${formatMoney(summary?.available_buying_power ?? (cashBalance - summary.margin_used), 'USD')}
+              </span>
+            ) : summary ? (
+              'Ready to trade'
+            ) : (
+              'No balance set'
+            )}
           </div>
         </div>
 
@@ -317,6 +342,43 @@ export function Portfolio({
                               </span>
                             )}
                           </div>
+
+                          {/* US Short Margin Level Gauge and Distance to Call */}
+                          {h.is_short && selectedMarket === 'US' && h.margin_level_pct !== null && h.margin_level_pct !== undefined && (
+                            <div className="mt-1 flex items-center space-x-1.5 flex-wrap gap-y-1">
+                              {/* Margin Level Badge / Gauge */}
+                              <span
+                                title={`Locked Margin Collateral: $${formatMoney(h.margin_locked, currency)} | Maintenance Req (125%): $${formatMoney(h.maintenance_margin_required, currency)}`}
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-mono-tabular font-bold tracking-wider uppercase border flex items-center ${
+                                  h.margin_level_pct < 125
+                                    ? 'bg-red/20 text-red border-red/60 animate-pulse'
+                                    : h.margin_level_pct < 140
+                                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/50'
+                                    : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40'
+                                }`}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full inline-block mr-1 bg-current" />
+                                <span>MARGIN LEVEL: {h.margin_level_pct.toFixed(1)}%</span>
+                              </span>
+
+                              {/* Distance to Margin Call */}
+                              <span
+                                title={`Liquidation Price: $${formatMoney(h.liquidation_price, currency)}`}
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-mono-tabular font-medium tracking-wider uppercase border ${
+                                  h.distance_to_margin_call_pct <= 5
+                                    ? 'bg-red/20 text-red border-red/60'
+                                    : h.distance_to_margin_call_pct <= 15
+                                    ? 'bg-amber-500/15 text-amber-400 border-amber-500/40'
+                                    : 'bg-surface border-border text-text-muted'
+                                }`}
+                              >
+                                {h.distance_to_margin_call_pct <= 0
+                                  ? '⚠️ LIQUIDATION BREACH'
+                                  : `${h.distance_to_margin_call_pct > 0 ? '+' : ''}${h.distance_to_margin_call_pct.toFixed(1)}% TO CALL ($${formatMoney(h.liquidation_price, currency)})`}
+                              </span>
+                            </div>
+                          )}
+
                           {h.square_off_date && (
                             <div className="mt-0.5 flex items-center">
                               {(() => {

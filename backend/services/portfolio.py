@@ -42,6 +42,11 @@ class HoldingPnL:
     square_off_date: date | None = None
     is_intraday: bool = False
     is_short: bool = False
+    margin_locked: float | None = None
+    maintenance_margin_required: float | None = None
+    margin_level_pct: float | None = None
+    liquidation_price: float | None = None
+    distance_to_margin_call_pct: float | None = None
     square_off_quantity: float | None = None
     lots: list[dict] = field(default_factory=list)
     price_error: str | None = None
@@ -55,6 +60,8 @@ class WalletSummary:
     currency: str
     cash_balance: float
     starting_balance: float
+    margin_used: float = 0.0
+    available_buying_power: float = 0.0
     holdings: list[HoldingPnL] = field(default_factory=list)
     total_holdings_value: float = 0.0
     total_wallet_value: float = 0.0
@@ -100,6 +107,28 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
             for l in (h.lots or [])
         ]
 
+        # US short margin calculation
+        margin_locked = None
+        maintenance_req = None
+        margin_level_pct = None
+        liq_price = None
+        dist_to_call_pct = None
+
+        if is_short and wallet.market == "US":
+            margin_locked = round(h.margin_locked or 0.0, 2)
+            if q and not q.error and q.price > 0:
+                curr_pos_val = round(q.price * h.quantity, 2)
+                maintenance_req = round(1.25 * curr_pos_val, 2)
+                margin_level_pct = round((margin_locked / curr_pos_val) * 100, 2) if curr_pos_val > 0 else 0.0
+                liq_price = round(margin_locked / (1.25 * h.quantity), 4) if h.quantity > 0 else 0.0
+                dist_to_call_pct = round(((liq_price - q.price) / q.price) * 100, 2) if q.price > 0 else 0.0
+            else:
+                cost_pos_val = round(h.avg_buy_price * h.quantity, 2)
+                maintenance_req = round(1.25 * cost_pos_val, 2)
+                margin_level_pct = round((margin_locked / cost_pos_val) * 100, 2) if cost_pos_val > 0 else 0.0
+                liq_price = round(margin_locked / (1.25 * h.quantity), 4) if h.quantity > 0 else 0.0
+                dist_to_call_pct = None
+
         if q is None or q.error:
             error_msg = (q.error if q else f"No quote returned for {h.ticker}")
             logger.warning("Could not price holding %s: %s", h.ticker, error_msg)
@@ -121,6 +150,11 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
                     is_short=is_short,
+                    margin_locked=margin_locked,
+                    maintenance_margin_required=maintenance_req,
+                    margin_level_pct=margin_level_pct,
+                    liquidation_price=liq_price,
+                    distance_to_margin_call_pct=dist_to_call_pct,
                     square_off_quantity=sq_off_qty,
                     lots=lots_data,
                     price_error=error_msg,
@@ -157,6 +191,11 @@ def get_holdings_with_pnl(db: Session, wallet: Wallet) -> list[HoldingPnL]:
                     square_off_date=h.square_off_date,
                     is_intraday=bool(h.is_intraday),
                     is_short=is_short,
+                    margin_locked=margin_locked,
+                    maintenance_margin_required=maintenance_req,
+                    margin_level_pct=margin_level_pct,
+                    liquidation_price=liq_price,
+                    distance_to_margin_call_pct=dist_to_call_pct,
                     square_off_quantity=sq_off_qty,
                     lots=lots_data,
                     price_error=None,
@@ -203,6 +242,8 @@ def get_wallet_summary(db: Session, wallet: Wallet) -> WalletSummary:
         currency=wallet.currency,
         cash_balance=wallet.current_cash_balance,
         starting_balance=wallet.starting_balance,
+        margin_used=round(wallet.margin_used or 0.0, 2),
+        available_buying_power=wallet.available_buying_power,
         holdings=holdings_pnl,
         total_holdings_value=total_holdings_value,
         total_wallet_value=total_wallet_value,

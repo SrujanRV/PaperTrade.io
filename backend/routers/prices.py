@@ -97,7 +97,7 @@ async def _price_event_generator(
             # Evaluate open pending orders against fresh incoming quotes
             try:
                 from database import SessionLocal
-                from services.order_engine import evaluate_pending_orders, evaluate_auto_square_off
+                from services.order_engine import evaluate_pending_orders, evaluate_auto_square_off, evaluate_margin_calls
                 with SessionLocal() as db_session:
                     triggered = evaluate_pending_orders(db_session, quotes=quotes)
                     if triggered:
@@ -105,8 +105,11 @@ async def _price_event_generator(
                     auto_sq_orders = evaluate_auto_square_off(db_session, quotes=quotes)
                     if auto_sq_orders:
                         logger.info("SSE tick cycle auto squared off %d holding(s)", len(auto_sq_orders))
+                    margin_call_orders = evaluate_margin_calls(db_session, quotes=quotes)
+                    if margin_call_orders:
+                        logger.info("SSE tick cycle liquidated %d short holding(s) due to margin call", len(margin_call_orders))
             except Exception as eval_exc:
-                logger.warning("Error evaluating pending orders / auto square-off in SSE cycle: %s", eval_exc)
+                logger.warning("Error evaluating pending orders / auto square-off / margin calls in SSE cycle: %s", eval_exc)
 
             for q in quotes:
                 payload = {

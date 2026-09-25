@@ -85,12 +85,30 @@ export function OrderTicket({
 
   // Short selling & cover buy operation flags
   const isShortSellOperation =
-    market === 'IN' &&
     side === 'sell' &&
+    orderType !== 'stop_loss' &&
     ((Number(quantity) || 0) > ownedQuantity || isHoldingShort);
+
+  const shortQty = isHoldingShort
+    ? (Number(quantity) || 0)
+    : Math.max(0, (Number(quantity) || 0) - ownedQuantity);
 
   const isCoverBuyOperation =
     side === 'buy' && isHoldingShort;
+
+  const isUSShort = market === 'US' && isShortSellOperation;
+  const isINShort = market === 'IN' && isShortSellOperation;
+
+  // Margin requirements
+  const requiredShortMargin = isUSShort
+    ? Number((1.5 * effectivePrice * shortQty).toFixed(2))
+    : isINShort
+    ? Number((effectivePrice * shortQty).toFixed(2))
+    : 0;
+
+  const availableBuyingPower = market === 'US'
+    ? (wallet?.available_buying_power ?? Math.max(0, (wallet?.current_cash_balance ?? 0) - (wallet?.margin_used ?? 0)))
+    : cashBalance;
 
   // Fetch resolved square-off date with in-memory caching and debouncing
   const fetchResolvedDate = useCallback((mkt, days) => {
@@ -110,7 +128,9 @@ export function OrderTicket({
   }, []);
 
   useEffect(() => {
-    if (side !== 'buy' || isCoverBuyOperation || durationMode === 'none') {
+    const isDurationApplicable =
+      (side === 'buy' && !isCoverBuyOperation) || (isShortSellOperation && market === 'US');
+    if (!isDurationApplicable || durationMode === 'none') {
       setCalculatedSquareOff(null);
       return;
     }
@@ -132,15 +152,13 @@ export function OrderTicket({
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [side, isCoverBuyOperation, durationMode, customDays, market, fetchResolvedDate]);
+  }, [side, isCoverBuyOperation, isShortSellOperation, durationMode, customDays, market, fetchResolvedDate]);
 
   // Validation checks
   const hasInsufficientFunds = side === 'buy' && totalCost > cashBalance;
-  const hasInsufficientMargin = isShortSellOperation && totalCost > cashBalance;
+  const hasInsufficientMargin = isShortSellOperation && requiredShortMargin > availableBuyingPower;
   const hasInsufficientHoldings =
-    side === 'sell' &&
-    (Number(quantity) || 0) > ownedQuantity &&
-    (market === 'US' || orderType === 'stop_loss');
+    orderType === 'stop_loss' && (Number(quantity) || 0) > ownedQuantity;
 
   async function handleOrderSubmit(e) {
     e.preventDefault();
@@ -186,22 +204,22 @@ export function OrderTicket({
     }
 
     if (hasInsufficientMargin) {
-      setErrorMsg(
-        `Insufficient margin. Opening this short position requires 1x cash margin of ${currencySymbol}${totalCost.toLocaleString()}, but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
-      );
+      if (isUSShort) {
+        setErrorMsg(
+          `Insufficient buying power. Opening this short position requires 150% initial margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available buying power is ${currencySymbol}${availableBuyingPower.toLocaleString()}.`
+        );
+      } else {
+        setErrorMsg(
+          `Insufficient margin. Opening this short position requires 1x cash margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
+        );
+      }
       return;
     }
 
     if (hasInsufficientHoldings) {
-      if (market === 'US') {
-        setErrorMsg(
-          `Insufficient holdings. You only own ${ownedQuantity} shares of ${upper}. Short selling is not currently supported for US equities.`
-        );
-      } else {
-        setErrorMsg(
-          `Insufficient holdings. Stop-loss orders can only protect shares you currently hold (${ownedQuantity} shares).`
-        );
-      }
+      setErrorMsg(
+        `Insufficient holdings. Stop-loss orders can only protect shares you currently hold (${ownedQuantity} shares).`
+      );
       return;
     }
 
@@ -218,7 +236,11 @@ export function OrderTicket({
         trigger_price: orderType === 'stop_loss' ? Number(triggerPrice) : null,
       };
 
-      if (side === 'buy' && !isCoverBuyOperation && durationMode !== 'none' && calculatedSquareOff) {
+      if (
+        ((side === 'buy' && !isCoverBuyOperation) || isUSShort) &&
+        durationMode !== 'none' &&
+        calculatedSquareOff
+      ) {
         orderPayload.holding_days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
         orderPayload.square_off_date = calculatedSquareOff.square_off_date;
         orderPayload.is_intraday = durationMode === 'intraday';
@@ -236,10 +258,12 @@ export function OrderTicket({
         const reasons = {
           market_closed: 'Market is closed. Trading is only permitted during regular market hours.',
           insufficient_funds: `Insufficient funds in ${currency} wallet to complete this purchase.`,
-          insufficient_margin: `Insufficient cash balance to meet the 1x margin requirement for short selling.`,
+          insufficient_margin: isUSShort
+            ? `Insufficient available buying power for US 150% margin requirement.`
+            : `Insufficient cash balance to meet the 1x margin requirement for short selling.`,
           insufficient_holdings: `Insufficient holdings. You do not hold enough shares of ${upper} to sell.`,
           intraday_only_for_short: `Short selling is intraday-only in Indian equities. Multi-day duration is not permitted.`,
-          us_short_not_supported: `Short selling is currently only supported for Indian markets (NSE/BSE). US shorting requires a margin account.`,
+          us_short_not_supported: `US short selling rejected. Please check available buying power.`,
           no_short_position: `No open short position to cover.`,
           invalid_ticker: `Invalid ticker symbol. Unable to fetch executable quote from exchange.`,
           wrong_market: `Ticker / wallet mismatch.`,
@@ -633,14 +657,28 @@ export function OrderTicket({
             </div>
           </div>
 
-          {/* Short Sell Intraday Warning Banner */}
-          {isShortSellOperation && (
+          {/* Short Sell Warning & Info Banners */}
+          {isINShort && (
             <div className="p-2.5 bg-accent/10 border border-accent/40 text-[11px] space-y-1 font-mono-tabular">
               <div className="flex items-center space-x-1.5 font-bold text-accent">
                 <span>⚡ INTRADAY SHORT POSITION (NSE/BSE)</span>
               </div>
               <div className="text-[10px] text-text-muted leading-tight">
                 Short selling is strictly intraday on Indian equities. Auto squared-off at 15:15 IST before session close. 1x cash margin required.
+              </div>
+            </div>
+          )}
+
+          {isUSShort && (
+            <div className="p-2.5 bg-accent/10 border border-accent/40 text-[11px] space-y-1 font-mono-tabular">
+              <div className="flex items-center justify-between font-bold text-accent">
+                <span>⚡ US REG T MARGIN SHORT</span>
+                <span className="text-[10px] px-1 bg-accent/20 border border-accent/30 text-accent font-semibold">
+                  150% MARGIN
+                </span>
+              </div>
+              <div className="text-[10px] text-text-muted leading-tight">
+                Requires 150% initial margin ({currencySymbol}{requiredShortMargin.toFixed(2)}). Position can be held overnight. Maintenance threshold is 125% of market value (force-liquidated if breached).
               </div>
             </div>
           )}
@@ -657,8 +695,8 @@ export function OrderTicket({
             </div>
           )}
 
-          {/* Holding Duration Selector (BUY side only, when not covering a short) */}
-          {side === 'buy' && !isCoverBuyOperation && (
+          {/* Holding Duration Selector (BUY side, or US Short side) */}
+          {((side === 'buy' && !isCoverBuyOperation) || isUSShort) && (
             <div className="font-mono-tabular space-y-2">
               <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-wider">
                 <span>HOLDING DURATION</span>
@@ -773,7 +811,9 @@ export function OrderTicket({
             </div>
             <div className="flex justify-between text-text-muted border-t border-border/60 pt-1.5">
               <span className="font-medium text-text-primary">
-                {isShortSellOperation
+                {isUSShort
+                  ? 'INITIAL MARGIN REQUIRED (150%):'
+                  : isINShort
                   ? 'SHORT SALE PROCEEDS (1X MARGIN):'
                   : isCoverBuyOperation
                   ? 'EST. COVER COST:'
@@ -783,18 +823,30 @@ export function OrderTicket({
               </span>
               <span className="font-semibold text-text-primary">
                 {currencySymbol}
-                {totalCost.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
+                {(isUSShort ? requiredShortMargin : totalCost).toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
               </span>
             </div>
+            {isUSShort && (
+              <div className="flex justify-between text-[11px] text-text-muted">
+                <span>EST. SALE PROCEEDS (CREDITED):</span>
+                <span className="text-green font-medium">
+                  +{currencySymbol}
+                  {totalCost.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
             {(side === 'buy' || isShortSellOperation) && (
               <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
-                <span>AVAILABLE CASH:</span>
+                <span>{isUSShort ? 'AVAILABLE BUYING POWER:' : 'AVAILABLE CASH:'}</span>
                 <span className={hasInsufficientFunds || hasInsufficientMargin ? 'text-red font-medium' : 'text-text-primary font-medium'}>
                   {currencySymbol}
-                  {cashBalance.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
+                  {(isUSShort ? availableBuyingPower : cashBalance).toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}
@@ -834,7 +886,7 @@ export function OrderTicket({
               : hasInsufficientFunds
               ? 'INSUFFICIENT FUNDS'
               : hasInsufficientMargin
-              ? 'INSUFFICIENT MARGIN'
+              ? (isUSShort ? 'INSUFFICIENT BUYING POWER' : 'INSUFFICIENT MARGIN')
               : hasInsufficientHoldings
               ? 'INSUFFICIENT HOLDINGS'
               : isCoverBuyOperation

@@ -180,7 +180,7 @@ class TestShortSelling(unittest.TestCase):
 
     @patch("services.order_engine.get_quote")
     def test_4_us_market_short_rejection(self, mock_get_quote):
-        """Test rejection when attempting to short sell in US market."""
+        """Test US short selling is now supported with 150% initial margin."""
         mock_get_quote.return_value = make_quote("AAPL", 220.0, currency="USD")
 
         order = place_order(
@@ -192,8 +192,11 @@ class TestShortSelling(unittest.TestCase):
             order_type="market",
         )
 
-        self.assertEqual(order.status, "rejected")
-        self.assertEqual(order.reject_reason, "us_short_not_supported")
+        self.assertEqual(order.status, "filled")
+        self.assertTrue(order.is_short)
+        self.db.refresh(self.us_wallet)
+        # 10 * 220 = $2,200 proceeds; 1.5 * 2,200 = $3,300 margin locked
+        self.assertEqual(self.us_wallet.margin_used, 3300.0)
 
     @patch("services.order_engine.get_quote")
     def test_5_multi_lot_fifo_cover_buy(self, mock_get_quote):

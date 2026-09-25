@@ -46,6 +46,7 @@ class Wallet(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)        # "INR" | "USD"
     starting_balance: Mapped[float] = mapped_column(Float, nullable=False)
     current_cash_balance: Mapped[float] = mapped_column(Float, nullable=False)
+    margin_used: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
@@ -61,8 +62,13 @@ class Wallet(Base):
         "Transaction", back_populates="wallet", cascade="all, delete-orphan"
     )
 
+    @property
+    def available_buying_power(self) -> float:
+        """Cash balance available for trading after locking margin collateral."""
+        return max(0.0, round(self.current_cash_balance - (self.margin_used or 0.0), 2))
+
     def __repr__(self) -> str:
-        return f"<Wallet market={self.market} cash={self.current_cash_balance:.2f} {self.currency}>"
+        return f"<Wallet market={self.market} cash={self.current_cash_balance:.2f} margin={self.margin_used:.2f} {self.currency}>"
 
 
 # ── Holding ───────────────────────────────────────────────────────────────────
@@ -90,6 +96,7 @@ class Holding(Base):
     square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    margin_locked: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc, onupdate=_now_utc
     )
@@ -103,7 +110,7 @@ class Holding(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} short={self.is_short} sq_off={self.square_off_date}>"
+        return f"<Holding {self.ticker} qty={self.quantity} avg={self.avg_buy_price} short={self.is_short} margin={self.margin_locked}>"
 
 
 # ── HoldingLot (Tranche-based position tracking) ──────────────────────────────
@@ -124,6 +131,7 @@ class HoldingLot(Base):
     square_off_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     is_intraday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_short: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    margin_locked: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
@@ -131,7 +139,7 @@ class HoldingLot(Base):
     holding: Mapped[Holding] = relationship("Holding", back_populates="lots")
 
     def __repr__(self) -> str:
-        return f"<HoldingLot {self.id} qty={self.quantity} @ {self.buy_price} short={self.is_short} sq_off={self.square_off_date}>"
+        return f"<HoldingLot {self.id} qty={self.quantity} @ {self.buy_price} short={self.is_short} margin={self.margin_locked}>"
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────

@@ -312,6 +312,11 @@ export function OrderHistory({
                               AUTO
                             </span>
                           )}
+                          {o.triggered_by === 'margin_call_liquidation' && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono-tabular font-bold uppercase border bg-red/20 text-red border-red/60 animate-pulse">
+                              MARGIN CALL
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -379,7 +384,11 @@ export function OrderHistory({
                           </button>
                         ) : isFilled ? (
                           <span className="text-text-muted">
-                            {o.triggered_by === 'auto_square_off' ? 'Auto square-off at close' : 'Executed @ market'}
+                            {o.triggered_by === 'margin_call_liquidation'
+                              ? 'Liquidated (Margin Call)'
+                              : o.triggered_by === 'auto_square_off'
+                              ? 'Auto square-off at close'
+                              : 'Executed @ market'}
                           </span>
                         ) : isCancelled ? (
                           <span className="text-text-muted">Cancelled by user</span>

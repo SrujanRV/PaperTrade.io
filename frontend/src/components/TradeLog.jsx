@@ -289,6 +289,11 @@ export function TradeLog({
                               AUTO
                             </span>
                           )}
+                          {t.triggered_by === 'margin_call_liquidation' && (
+                            <span className="px-1.5 py-0.2 bg-red/20 border border-red/60 text-red text-[9px] font-bold tracking-wider rounded font-mono-tabular">
+                              MARGIN CALL
+                            </span>
+                          )}
                         </div>
                       </td>
 

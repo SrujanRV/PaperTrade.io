@@ -217,7 +217,7 @@ def test_insufficient_funds():
 
 
 def test_insufficient_holdings():
-    section("4. Rejection — insufficient holdings (sell more than owned)")
+    section("4. Rejection — insufficient holdings (sell more than owned on pending limit)")
     setup_us_wallet(10_000)
 
     with patch("services.order_engine.get_quote", return_value=_make_quote("AAPL", 150.0, True)):
@@ -225,14 +225,15 @@ def test_insufficient_holdings():
 
     with patch("services.order_engine.get_quote", return_value=_make_quote("AAPL", 150.0, True)):
         r = client.post("/api/orders", json={
-            "market": "US", "ticker": "AAPL", "side": "sell", "quantity": 10  # only have 5
+            "market": "US", "ticker": "AAPL", "side": "sell", "quantity": 10,  # only have 5
+            "order_type": "limit", "requested_price": 200.0,
         })
 
     order = r.json()
     print(f"  Order: status={order['status']} reason={order['reject_reason']}")
     check(order["status"] == "rejected",                   "status should be rejected")
     check(order["reject_reason"] == "insufficient_holdings", "wrong reject_reason")
-    print("  ✅  Rejected correctly (tried to sell 10, only have 5)")
+    print("  ✅  Rejected correctly (tried to limit sell 10, only have 5)")
 
 
 def test_market_closed():

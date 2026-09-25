@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from database import SessionLocal
 from main import app
-from models.orm import Holding, Order, Transaction, Wallet
+from models.orm import Holding, HoldingLot, Order, Transaction, Wallet
 from services.order_engine import evaluate_auto_square_off, place_order
 from services.trading_calendar import (
     calculate_square_off_date,
@@ -106,7 +106,8 @@ def test_auto_square_off_execution_and_partial_sell():
             db.commit()
             db.refresh(wallet)
 
-        # Clear existing holdings for clean test
+        # Clear existing holdings and lots for clean test
+        db.query(HoldingLot).delete()
         db.query(Holding).filter(Holding.wallet_id == wallet.id).delete()
         db.commit()
 
@@ -123,6 +124,17 @@ def test_auto_square_off_execution_and_partial_sell():
         db.add(test_holding)
         db.commit()
         db.refresh(test_holding)
+
+        lot = HoldingLot(
+            holding_id=test_holding.id,
+            quantity=10.0,
+            buy_price=300.0,
+            square_off_date=past_date,
+            is_intraday=False,
+            is_short=False,
+        )
+        db.add(lot)
+        db.commit()
 
         initial_cash = wallet.current_cash_balance
 

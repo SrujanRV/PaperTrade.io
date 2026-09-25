@@ -129,6 +129,21 @@ export function Header({
           )}
         </div>
 
+        {/* US Buying Power (only shown when margin_used > 0) */}
+        {usWallet && (usWallet.margin_used || 0) > 0 && (
+          <div
+            title={`Total Locked Margin Collateral: $${formatMoney(usWallet.margin_used, 'USD')}`}
+            className="flex items-center space-x-2 px-2.5 py-1 bg-surface border border-accent/40"
+          >
+            <span className="text-[10px] font-mono-tabular uppercase text-accent font-medium">
+              US BUYING POWER:
+            </span>
+            <span className="text-xs font-mono-tabular font-semibold text-text-primary">
+              ${formatMoney(usWallet.available_buying_power ?? (usWallet.current_cash_balance - usWallet.margin_used), 'USD')}
+            </span>
+          </div>
+        )}
+
         {/* Global Clock */}
         <div className="hidden md:flex items-center text-[11px] font-mono-tabular text-text-muted border-l border-border pl-4">
           <span>{currentTime}</span>
