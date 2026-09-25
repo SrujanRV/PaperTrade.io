@@ -146,14 +146,43 @@ app.include_router(wallet_router)
 app.include_router(orders_router)
 app.include_router(single_order_router)
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi import HTTPException
+import os
 
-@app.get("/", include_in_schema=False)
-async def root():
-    return RedirectResponse(url="/docs")
-
+FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 
 @app.get("/api/health")
 async def health():
     """Simple liveness check."""
     return {"status": "ok", "version": app.version}
+
+if os.path.isdir(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        index_path = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path)
+        return RedirectResponse(url="/docs")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # Never intercept API, docs, or OpenAPI endpoints
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path == "openapi.json":
+            raise HTTPException(status_code=404, detail="Not Found")
+        target = os.path.join(FRONTEND_DIST, full_path)
+        if full_path and os.path.isfile(target):
+            return FileResponse(target)
+        index_file = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Frontend build not found")
+else:
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return RedirectResponse(url="/docs")
