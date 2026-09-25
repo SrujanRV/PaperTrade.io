@@ -1,6 +1,6 @@
 """
-test_windows_launcher.py — Comprehensive verification for PaperTrade Windows Desktop Launcher,
-unified production frontend serving, duplicate-instance detection, and stop_server utility.
+test_windows_launcher.py — Verification for PaperTrade Windows Desktop Launcher,
+browser selection, unified static frontend serving, and duplicate-instance detection.
 """
 
 import os
@@ -11,31 +11,38 @@ import urllib.request
 import json
 import subprocess
 
-# Ensure import paths
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, PROJECT_ROOT)
 
 import launcher
-import stop_server
+
+def _kill_port_8000():
+    try:
+        out = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True)
+        for line in out.splitlines():
+            if ":8000" in line and "LISTENING" in line:
+                pid = line.strip().split()[-1]
+                if pid.isdigit() and int(pid) > 0:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", pid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        pass
 
 class TestWindowsLauncher(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Ensure clean state: stop any existing server
-        stop_server.stop()
+        _kill_port_8000()
         time.sleep(1.0)
 
     @classmethod
     def tearDownClass(cls):
-        # Clean up after all tests
-        stop_server.stop()
+        _kill_port_8000()
 
     def test_01_launcher_cold_start_and_unified_serving(self):
         """Test that launcher starts the server and serves both static frontend and API on port 8000."""
         self.assertFalse(launcher.is_server_running(), "Server should not be running prior to launch")
 
-        # Launch server
-        launcher.launch()
+        # Launch server (suppressing browser window popup during automated test)
+        launcher.launch(open_browser_window=False, prompt_gui=False)
         self.assertTrue(launcher.is_server_running(), "Server must be running after launcher.launch()")
 
         # 1. Verify health check
@@ -70,47 +77,40 @@ class TestWindowsLauncher(unittest.TestCase):
         """Test that running launcher when server is already running detects it and avoids duplicates."""
         self.assertTrue(launcher.is_server_running(), "Server should already be running")
 
-        # Record count of listening ports/processes
         out_before = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True)
         listening_before = [line for line in out_before.splitlines() if ":8000" in line and "LISTENING" in line]
         self.assertGreaterEqual(len(listening_before), 1, "Should have 1 listening server process on port 8000")
 
-        # Launch again
-        launcher.launch()
+        # Launch again with duplicate check
+        launcher.launch(open_browser_window=False, prompt_gui=False)
 
-        # Check listening ports/processes again
         time.sleep(0.5)
         out_after = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True)
         listening_after = [line for line in out_after.splitlines() if ":8000" in line and "LISTENING" in line]
 
-        # There should not be multiple conflicting servers
         self.assertEqual(len(listening_before), len(listening_after), "Duplicate server must NOT be spawned")
         self.assertTrue(launcher.is_server_running(), "Server must remain healthy and responsive")
 
-    def test_03_stop_server_utility(self):
-        """Test that stop_server.pyw cleanly terminates the server running on port 8000."""
-        self.assertTrue(launcher.is_server_running(), "Server should be running before stop")
+    def test_03_browser_resolution_and_persistence(self):
+        """Test that browser resolution handles detected browsers and persists user config."""
+        browsers = launcher.detect_installed_browsers()
+        self.assertGreaterEqual(len(browsers), 1)
 
-        stop_server.stop()
-        time.sleep(1.5)
+        # Set a test preference
+        first_name, first_path = next(iter(browsers.items()))
+        launcher.save_browser_pref(first_name, first_path)
 
-        self.assertFalse(launcher.is_server_running(), "Server must NOT be running after stop_server.stop()")
+        resolved_path = launcher.resolve_browser(force_prompt=False)
+        self.assertEqual(resolved_path, first_path)
 
-        out = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True)
-        listening = [line for line in out.splitlines() if ":8000" in line and "LISTENING" in line]
-        self.assertEqual(len(listening), 0, "No process should be LISTENING on port 8000")
+    def test_04_desktop_shortcuts_integrity(self):
+        """Verify that only PaperTrade.io.lnk exists on Desktop and Stop PaperTrade.lnk is removed."""
+        desktop = os.path.expanduser("~/Desktop")
+        app_lnk = os.path.join(desktop, "PaperTrade.io.lnk")
+        stop_lnk = os.path.join(desktop, "Stop PaperTrade.lnk")
 
-    def test_04_relaunch_after_stop(self):
-        """Test that launcher can cleanly re-launch the server after being stopped."""
-        self.assertFalse(launcher.is_server_running(), "Server should not be running")
-
-        launcher.launch()
-        self.assertTrue(launcher.is_server_running(), "Server must be running after re-launch")
-
-        # Clean up
-        stop_server.stop()
-        time.sleep(1.0)
-        self.assertFalse(launcher.is_server_running(), "Server stopped after test")
+        self.assertTrue(os.path.isfile(app_lnk), "PaperTrade.io.lnk must exist on Desktop")
+        self.assertFalse(os.path.isfile(stop_lnk), "Stop PaperTrade.lnk must NOT exist on Desktop")
 
 if __name__ == "__main__":
     unittest.main()

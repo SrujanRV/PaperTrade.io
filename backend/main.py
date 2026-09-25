@@ -122,11 +122,27 @@ if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.g
         _conn.commit()
 
 
+from contextlib import asynccontextmanager
+import asyncio
+from services.heartbeat import HeartbeatManager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    manager = HeartbeatManager.get_instance()
+    watchdog_task = asyncio.create_task(manager.start_watchdog())
+    yield
+    watchdog_task.cancel()
+    try:
+        await watchdog_task
+    except asyncio.CancelledError:
+        pass
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="PaperTrade API",
     description="Backend for the PaperTrade paper-trading web application.",
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 # ── CORS (development: allow Vite + CRA dev servers) ─────────────────────────
@@ -148,8 +164,11 @@ app.include_router(single_order_router)
 
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from pydantic import BaseModel
+from typing import Optional
 import os
+import json
 
 FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 
@@ -157,6 +176,37 @@ FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "f
 async def health():
     """Simple liveness check."""
     return {"status": "ok", "version": app.version}
+
+class HeartbeatPayload(BaseModel):
+    tab_id: str
+    status: Optional[str] = None
+
+@app.post("/api/heartbeat")
+async def post_heartbeat(payload: HeartbeatPayload):
+    HeartbeatManager.get_instance().record_heartbeat(payload.tab_id)
+    return {"status": "ok"}
+
+@app.post("/api/heartbeat/unload")
+async def post_heartbeat_unload(request: Request):
+    tab_id = None
+    try:
+        data = await request.json()
+        tab_id = data.get("tab_id")
+    except Exception:
+        try:
+            raw = (await request.body()).decode("utf-8")
+            data = json.loads(raw)
+            tab_id = data.get("tab_id")
+        except Exception:
+            tab_id = None
+
+    if tab_id:
+        HeartbeatManager.get_instance().record_unload(tab_id)
+    return {"status": "unloaded"}
+
+@app.get("/api/heartbeat/status")
+async def get_heartbeat_status():
+    return HeartbeatManager.get_instance().get_status()
 
 if os.path.isdir(FRONTEND_DIST):
     assets_dir = os.path.join(FRONTEND_DIST, "assets")

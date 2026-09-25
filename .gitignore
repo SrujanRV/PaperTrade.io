@@ -19,6 +19,7 @@ env/
 # Environment
 .env
 .env.*
+browser_config.json
 
 # Frontend
 node_modules/

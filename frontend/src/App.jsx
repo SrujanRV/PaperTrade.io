@@ -10,6 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CandlestickChartModal } from './components/CandlestickChartModal';
 import { fetchWallet, fetchPendingOrders, fetchOrders } from './api/client';
 import { usePriceStream } from './hooks/usePriceStream';
+import { useHeartbeat } from './hooks/useHeartbeat';
 
 const LEGACY_STORAGE_KEY = 'papertrade_watchlist';
 const STORAGE_KEY_IN = 'papertrade_watchlist_IN';
@@ -74,6 +75,7 @@ function loadInitialDefaultTab() {
 }
 
 export default function App() {
+  useHeartbeat();
   const [inWallet, setInWallet] = useState(null);
   const [usWallet, setUsWallet] = useState(null);
   const [checkingWallets, setCheckingWallets] = useState(true);
