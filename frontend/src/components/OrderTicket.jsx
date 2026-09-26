@@ -231,7 +231,10 @@ export function OrderTicket({
           setCompletedOrder(resOrder);
           if (onOrderExecuted) onOrderExecuted(resOrder);
         } else {
-          setErrorMsg(resOrder.reject_reason || 'Derivative order rejected');
+          const reasonMsg = resOrder.reject_reason === 'market_closed'
+            ? 'Market is currently closed. Derivative orders cannot be executed outside exchange trading hours.'
+            : (resOrder.reject_reason || 'Derivative order rejected');
+          setErrorMsg(reasonMsg);
         }
       } catch (err) {
         setErrorMsg(err.message || 'Derivative order execution failed');

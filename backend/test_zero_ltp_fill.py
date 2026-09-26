@@ -82,6 +82,7 @@ def run_zero_ltp_verification():
             bid=179.05,
             ask=238.20,
             underlying_price=1380.0,
+            check_market_hours=False,
         )
 
         print(f"\nResulting Order:")
@@ -121,6 +122,7 @@ def run_zero_ltp_verification():
             bid=179.05,
             ask=238.20,
             underlying_price=1380.0,
+            check_market_hours=False,
         )
 
         print(f"\nResulting Order:")
@@ -186,6 +188,7 @@ def run_zero_ltp_verification():
             bid=4.20,
             ask=4.50,
             underlying_price=425.0,
+            check_market_hours=False,
         )
 
         print(f"Resulting US Order:")
@@ -228,6 +231,7 @@ def run_zero_ltp_verification():
             bid=0.0,        # No bid
             ask=0.0,        # No ask
             underlying_price=1380.0,
+            check_market_hours=False,
         )
 
         print(f"Resulting Order:")

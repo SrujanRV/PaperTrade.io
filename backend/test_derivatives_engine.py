@@ -1091,16 +1091,225 @@ def test_naked_option_margin_uses_spot_price_not_strike():
         db.close()
 
 
+def test_derivative_market_hours_enforcement():
+    """
+    Verifies market-hours blocking across all derivative instrument types:
+    1. Indian F&O (NSE):
+       - Wednesday 10:30 IST -> open -> order fills.
+       - Wednesday 16:00 IST -> closed -> order rejected with "market_closed".
+       - Saturday 12:00 IST  -> closed -> order rejected with "market_closed".
+    2. US Options (NASDAQ/NYSE):
+       - Wednesday 11:00 ET  -> open -> order fills.
+       - Wednesday 18:00 ET  -> closed -> order rejected with "market_closed".
+       - Sunday 12:00 ET     -> closed -> order rejected with "market_closed".
+    3. US Continuous Futures (CME Globex):
+       - Wednesday 02:00 CT  -> open -> order fills.
+       - Wednesday 16:30 CT (daily halt) -> closed -> order rejected with "market_closed".
+       - Saturday 12:00 CT (weekend)     -> closed -> order rejected with "market_closed".
+       - Sunday 18:00 CT (reopens)       -> open -> order fills.
+    """
+    from zoneinfo import ZoneInfo
+    db, in_wallet, us_wallet = setup_test_db()
+    try:
+        # 1. Indian F&O Contract
+        in_contract = get_or_create_contract(
+            db=db,
+            market="IN",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="call",
+            strike_price=23000.0,
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+        )
+
+        # 1a. Wednesday 10:30 IST (during session)
+        dt_in_open = datetime(2026, 9, 23, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+        order_in_open = place_derivative_order(
+            db=db,
+            wallet=in_wallet,
+            contract=in_contract,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=100.0,
+            execution_time=dt_in_open,
+        )
+        assert order_in_open.status == "filled", f"Expected filled, got {order_in_open.reject_reason}"
+
+        # 1b. Wednesday 16:00 IST (after NSE close at 15:30)
+        dt_in_afterhours = datetime(2026, 9, 23, 16, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        order_in_closed = place_derivative_order(
+            db=db,
+            wallet=in_wallet,
+            contract=in_contract,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=100.0,
+            execution_time=dt_in_afterhours,
+        )
+        assert order_in_closed.status == "rejected"
+        assert order_in_closed.reject_reason == "market_closed"
+
+        # 1c. Saturday 12:00 IST (weekend)
+        dt_in_weekend = datetime(2026, 9, 26, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        order_in_sat = place_derivative_order(
+            db=db,
+            wallet=in_wallet,
+            contract=in_contract,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=100.0,
+            execution_time=dt_in_weekend,
+        )
+        assert order_in_sat.status == "rejected"
+        assert order_in_sat.reject_reason == "market_closed"
+
+        # 2. US Options Contract
+        us_opt = get_or_create_contract(
+            db=db,
+            market="US",
+            underlying="AAPL",
+            instrument_type="option",
+            option_type="call",
+            strike_price=220.0,
+            expiry_date=date(2026, 10, 16),
+            lot_size=100,
+        )
+
+        # 2a. Wednesday 11:00 ET (during regular session)
+        dt_us_open = datetime(2026, 9, 23, 11, 0, tzinfo=ZoneInfo("America/New_York"))
+        order_us_open = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_opt,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5.0,
+            execution_time=dt_us_open,
+        )
+        assert order_us_open.status == "filled"
+
+        # 2b. Wednesday 18:00 ET (after regular close at 16:00 ET)
+        dt_us_afterhours = datetime(2026, 9, 23, 18, 0, tzinfo=ZoneInfo("America/New_York"))
+        order_us_closed = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_opt,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5.0,
+            execution_time=dt_us_afterhours,
+        )
+        assert order_us_closed.status == "rejected"
+        assert order_us_closed.reject_reason == "market_closed"
+
+        # 2c. Sunday 12:00 ET (weekend)
+        dt_us_weekend = datetime(2026, 9, 27, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+        order_us_sun = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_opt,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5.0,
+            execution_time=dt_us_weekend,
+        )
+        assert order_us_sun.status == "rejected"
+        assert order_us_sun.reject_reason == "market_closed"
+
+        # 3. US Continuous Futures (CME Globex: ES=F)
+        us_fut = get_or_create_contract(
+            db=db,
+            market="US",
+            underlying="ES",
+            instrument_type="future",
+            symbol="ES=F",
+            lot_size=50,
+        )
+
+        # 3a. Wednesday 02:00 CT (overnight Globex trading)
+        dt_cme_overnight = datetime(2026, 9, 23, 2, 0, tzinfo=ZoneInfo("America/Chicago"))
+        order_cme_open = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_fut,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5500.0,
+            execution_time=dt_cme_overnight,
+        )
+        assert order_cme_open.status == "filled"
+
+        # 3b. Wednesday 16:30 CT (daily maintenance halt: 16:00-17:00 CT)
+        dt_cme_halt = datetime(2026, 9, 23, 16, 30, tzinfo=ZoneInfo("America/Chicago"))
+        order_cme_halt = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_fut,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5500.0,
+            execution_time=dt_cme_halt,
+        )
+        assert order_cme_halt.status == "rejected"
+        assert order_cme_halt.reject_reason == "market_closed"
+
+        # 3c. Saturday 12:00 CT (weekend shutdown)
+        dt_cme_sat = datetime(2026, 9, 26, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        order_cme_sat = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_fut,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5500.0,
+            execution_time=dt_cme_sat,
+        )
+        assert order_cme_sat.status == "rejected"
+        assert order_cme_sat.reject_reason == "market_closed"
+
+        # 3d. Sunday 18:00 CT (Globex Sunday reopen at 17:00 CT)
+        us_wallet.margin_used = 0.0
+        db.commit()
+        dt_cme_sun_open = datetime(2026, 9, 27, 18, 0, tzinfo=ZoneInfo("America/Chicago"))
+        order_cme_sun = place_derivative_order(
+            db=db,
+            wallet=us_wallet,
+            contract=us_fut,
+            side="buy",
+            action="buy_to_open",
+            quantity=1.0,
+            fill_price=5500.0,
+            execution_time=dt_cme_sun_open,
+        )
+        assert order_cme_sun.status == "filled"
+
+        print("[PASS] test_derivative_market_hours_enforcement")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     print("Running test_derivatives_engine.py unit test suite...")
-    test_option_buying_upfront_premium_and_no_margin()
-    test_covered_call_writing_zero_margin()
-    test_naked_option_writing_requires_20_pct_initial_margin()
-    test_option_exits_and_margin_release()
-    test_futures_trading_margin_and_closure()
-    test_futures_daily_mark_to_market_settlement()
-    test_derivatives_expiry_cash_settlement()
-    test_derivative_margin_call_liquidation()
-    test_get_derivative_positions_summary()
-    test_naked_option_margin_uses_spot_price_not_strike()
-    print("\nALL 10 DERIVATIVES ENGINE TESTS PASSED!")
+    with patch("services.derivatives_engine.is_derivative_market_open", return_value=True):
+        test_option_buying_upfront_premium_and_no_margin()
+        test_covered_call_writing_zero_margin()
+        test_naked_option_writing_requires_20_pct_initial_margin()
+        test_option_exits_and_margin_release()
+        test_futures_trading_margin_and_closure()
+        test_futures_daily_mark_to_market_settlement()
+        test_derivatives_expiry_cash_settlement()
+        test_derivative_margin_call_liquidation()
+        test_get_derivative_positions_summary()
+        test_naked_option_margin_uses_spot_price_not_strike()
+    test_derivative_market_hours_enforcement()
+    print("\nALL 11 DERIVATIVES ENGINE TESTS PASSED!")

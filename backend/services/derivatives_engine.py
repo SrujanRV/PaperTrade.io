@@ -41,9 +41,30 @@ from models.orm import (
     DerivativeTransaction,
 )
 from models.schemas import DerivativeOrderRequest
-from services.price_feed import PriceQuote, get_quote
+from services.price_feed import PriceQuote, get_quote, is_market_open, is_cme_globex_open
 
 logger = logging.getLogger(__name__)
+
+
+def is_derivative_market_open(contract: DerivativeContract, dt: datetime | None = None) -> bool:
+    """
+    Determines if the trading venue for this derivative contract is currently open:
+    - Indian F&O (NIFTY/BANKNIFTY options/futures and Indian stock F&O): NSE trading hours (09:15–15:30 IST Mon–Fri).
+    - US Options: Regular US equity trading hours (09:30–16:00 ET Mon–Fri on NYSE/NASDAQ).
+    - US Futures (ES=F, NQ=F, CL=F, GC=F): CME Globex schedule (Sunday 17:00 CT to Friday 16:00 CT, minus 16:00-17:00 CT daily halt).
+    """
+    m = (contract.market or "IN").upper()
+    itype = (contract.instrument_type or "option").lower()
+
+    if m == "IN":
+        return is_market_open("NSE", dt=dt)
+    elif m == "US":
+        if itype == "option":
+            return is_market_open("NASDAQ", dt=dt)
+        elif itype == "future":
+            return is_cme_globex_open(dt=dt)
+        return is_market_open("NASDAQ", dt=dt)
+    return True
 
 
 def _now_utc() -> datetime:
@@ -262,6 +283,8 @@ def place_derivative_order(
     underlying_price: float | None = None,
     settlement_date: date | None = None,
     triggered_by: str | None = None,
+    check_market_hours: bool = True,
+    execution_time: datetime | None = None,
 ) -> DerivativeOrder:
     """
     Executes an Options or Futures order with strict margin & premium validation.
@@ -274,6 +297,14 @@ def place_derivative_order(
         raise ValueError(f"Invalid action '{action}' for buy side order")
     if side == "sell" and action not in ("sell_to_open", "sell_to_close"):
         raise ValueError(f"Invalid action '{action}' for sell side order")
+
+    # ── Market Hours Enforcement ──────────────────────────────────────────────
+    if check_market_hours and triggered_by != "margin_call_liquidation":
+        if not is_derivative_market_open(contract, dt=execution_time):
+            return _persist_rejected_order(
+                db, wallet.id, contract.id, side, action, quantity,
+                "market_closed", order_type, requested_price
+            )
 
     # Resolve fill price
     if order_type == "limit" and requested_price and requested_price > 0:

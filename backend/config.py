@@ -37,6 +37,15 @@ MARKET_SESSIONS = {
         "close": (16, 0),
         "weekdays": range(0, 5),
     },
+    "CME": {
+        "tz": ZoneInfo("America/Chicago"),
+        # CME Globex: Sunday 17:00 CT - Friday 16:00 CT with daily halt 16:00-17:00 CT Mon-Thu
+        "daily_break": ((16, 0), (17, 0)),
+        "weekend_close_day": 4,  # Friday
+        "weekend_close_time": (16, 0),
+        "weekend_open_day": 6,   # Sunday
+        "weekend_open_time": (17, 0),
+    },
 }
 
 # ── Exchange detection ──────────────────────────────────────────────────────

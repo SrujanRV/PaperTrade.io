@@ -101,14 +101,54 @@ def _display_name(symbol: str) -> str:
     return upper
 
 
-def is_market_open(exchange: str) -> bool:
+def is_cme_globex_open(dt: datetime | None = None) -> bool:
+    """
+    CME Globex Schedule (US Central Time):
+    - Trades Sunday 17:00 CT through Friday 16:00 CT.
+    - Weekend close: Friday 16:00 CT through Sunday 17:00 CT.
+    - Daily maintenance halt: 16:00 CT to 17:00 CT Monday through Thursday.
+    """
+    session = MARKET_SESSIONS.get("CME")
+    cme_tz = session["tz"] if session else ZoneInfo("America/Chicago")
+    if dt is None:
+        now = datetime.now(tz=cme_tz)
+    else:
+        now = dt.astimezone(cme_tz) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(cme_tz)
+
+    weekday = now.weekday()  # Monday=0 ... Friday=4, Saturday=5, Sunday=6
+    time_val = (now.hour, now.minute)
+
+    # Friday close at 16:00 CT
+    if weekday == 4 and time_val >= (16, 0):
+        return False
+    # Saturday closed all day
+    if weekday == 5:
+        return False
+    # Sunday closed before 17:00 CT
+    if weekday == 6 and time_val < (17, 0):
+        return False
+    # Mon-Thu daily maintenance pause: 16:00 - 17:00 CT
+    if weekday in (0, 1, 2, 3) and (16, 0) <= time_val < (17, 0):
+        return False
+
+    return True
+
+
+def is_market_open(exchange: str, dt: datetime | None = None) -> bool:
     """Return True if the given exchange is currently in its trading session."""
+    if exchange == "CME":
+        return is_cme_globex_open(dt=dt)
+
     session = MARKET_SESSIONS.get(exchange)
     if not session:
         logger.warning("Unknown exchange %r — assuming open", exchange)
         return True
 
-    now = datetime.now(tz=session["tz"])
+    if dt is None:
+        now = datetime.now(tz=session["tz"])
+    else:
+        now = dt.astimezone(session["tz"]) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(session["tz"])
+
     if now.weekday() not in session["weekdays"]:
         return False
 
