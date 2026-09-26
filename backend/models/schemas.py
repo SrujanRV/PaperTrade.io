@@ -240,3 +240,77 @@ class TradeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Derivatives (F&O) Schemas ─────────────────────────────────────────────────
+
+class DerivativeContractOut(BaseModel):
+    """Tradeable Options or Futures contract specification"""
+    id: int
+    symbol: str
+    underlying: str
+    instrument_type: Literal["option", "future"]
+    option_type: Literal["call", "put"] | None = None
+    strike_price: float | None = None
+    expiry_date: date | None = None
+    lot_size: int
+    market: Literal["IN", "US"]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DerivativePositionOut(BaseModel):
+    """Open Options or Futures position"""
+    id: int
+    wallet_id: int
+    contract_id: int
+    contract: DerivativeContractOut
+    side: Literal["long", "short"]
+    quantity: float  # in lots
+    entry_price: float
+    is_covered: bool = False
+    margin_locked: float = 0.0
+    last_mtm_price: float | None = None
+    last_mtm_date: date | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DerivativeOrderOut(BaseModel):
+    """Derivative order attempt and execution status"""
+    id: int
+    wallet_id: int
+    contract_id: int
+    contract: DerivativeContractOut | None = None
+    side: Literal["buy", "sell"]
+    action: Literal["buy_to_open", "sell_to_open", "buy_to_close", "sell_to_close"]
+    quantity: float  # in lots
+    order_type: Literal["market", "limit"] = "market"
+    requested_price: float | None = None
+    executed_price: float | None = None
+    status: Literal["pending", "filled", "rejected", "cancelled"]
+    reject_reason: str | None = None
+    margin_required: float = 0.0
+    created_at: datetime
+    executed_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class DerivativeTransactionOut(BaseModel):
+    """Immutable ledger entry for derivative events (trades, daily MTM, expiry)"""
+    id: int
+    wallet_id: int
+    position_id: int | None = None
+    order_id: int | None = None
+    transaction_type: Literal["trade", "mtm_settlement", "expiry_settlement"]
+    amount: float  # cash flow (+ credited, - debited)
+    price: float | None = None
+    realized_pnl: float | None = None
+    cash_balance_after: float
+    timestamp: datetime
+
+    model_config = {"from_attributes": True}
+
+
+

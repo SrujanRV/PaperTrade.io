@@ -138,6 +138,12 @@ if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.g
         """))
         _conn.commit()
 
+_derivative_tables = {"derivative_contracts", "derivative_positions", "derivative_orders", "derivative_transactions"}
+_current_tables = set(sa_inspect(engine).get_table_names())
+if _derivative_tables.issubset(_current_tables):
+    logger.info("Derivatives (F&O) tables verified: %s", ", ".join(sorted(_derivative_tables)))
+
+
 
 from contextlib import asynccontextmanager
 import asyncio
