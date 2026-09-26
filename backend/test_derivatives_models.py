@@ -86,6 +86,82 @@ def test_derivative_contract_creation():
         db.close()
 
 
+def test_multiple_strikes_coexist_and_duplicate_rejected():
+    """
+    Confirms that UniqueConstraint on DerivativeContract allows multiple strike prices
+    to coexist for the same underlying + expiry + option_type, while rejecting exact duplicates.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    db = setup_in_memory_db()
+    try:
+        # 1. Insert multiple strikes for same underlying + expiry + call
+        strikes = [23000.0, 23050.0, 23100.0, 23150.0, 23200.0]
+        for s in strikes:
+            contract = DerivativeContract(
+                symbol=f"NIFTY26SEP{int(s)}CE",
+                underlying="NIFTY",
+                instrument_type="option",
+                option_type="call",
+                strike_price=s,
+                expiry_date=date(2026, 9, 29),
+                lot_size=65,
+                market="IN",
+            )
+            db.add(contract)
+        db.commit()
+
+        # Also add a PUT at strike 23150 (same underlying, expiry, strike as CE)
+        put_contract = DerivativeContract(
+            symbol="NIFTY26SEP23150PE",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="put",
+            strike_price=23150.0,
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+            market="IN",
+        )
+        db.add(put_contract)
+        db.commit()
+
+        # Query all NIFTY 29-Sep-2026 calls
+        calls = (
+            db.query(DerivativeContract)
+            .filter(
+                DerivativeContract.underlying == "NIFTY",
+                DerivativeContract.expiry_date == date(2026, 9, 29),
+                DerivativeContract.option_type == "call",
+            )
+            .all()
+        )
+        assert len(calls) == 5
+        retrieved_strikes = sorted([c.strike_price for c in calls])
+        assert retrieved_strikes == strikes
+
+        # 2. Attempt exact duplicate (NIFTY 29-Sep-2026 Call @ 23150) -> Must trigger IntegrityError
+        duplicate_contract = DerivativeContract(
+            symbol="NIFTY26SEP23150CE_DUP",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="call",
+            strike_price=23150.0,  # Exact duplicate spec!
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+            market="IN",
+        )
+        db.add(duplicate_contract)
+        try:
+            db.commit()
+            assert False, "Expected IntegrityError for duplicate contract spec, but commit succeeded"
+        except IntegrityError:
+            db.rollback()
+
+        print("[PASS] test_multiple_strikes_coexist_and_duplicate_rejected passed: multiple strikes coexist seamlessly, exact duplicate rejected!")
+    finally:
+        db.close()
+
+
 def test_derivative_position_and_transactions():
     db = setup_in_memory_db()
     try:
@@ -367,6 +443,7 @@ def test_shared_pooled_margin_used():
 
 if __name__ == "__main__":
     test_derivative_contract_creation()
+    test_multiple_strikes_coexist_and_duplicate_rejected()
     test_derivative_position_and_transactions()
     test_shared_pooled_margin_used()
     print("\nALL PHASE 6b DATABASE MODELS & MARGIN POOLING TESTS PASSED SUCCESSFULLY!")
