@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Layers, ShieldCheck, AlertTriangle } from 'lucide-react';
-import { placeOrder, placeDerivativeOrder, calculateSquareOffDate } from '../api/client';
+import { X, Layers, ShieldCheck, AlertTriangle, AlertCircle } from 'lucide-react';
+import { placeOrder, placeDerivativeOrder, calculateSquareOffDate, fetchMarketStatus } from '../api/client';
 import { LivePriceChart } from './LivePriceChart';
 
 function formatMoney(amount, currency = 'USD') {
@@ -35,6 +35,7 @@ export function OrderTicket({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [completedOrder, setCompletedOrder] = useState(null);
+  const [derivMarketOpen, setDerivMarketOpen] = useState(true);
 
   // Derivative-specific action state
   // Options: 'buy_to_open' | 'sell_to_open' | 'buy_to_close' | 'sell_to_close'
@@ -81,6 +82,16 @@ export function OrderTicket({
       setTriggerPrice(String(Number((quote.current_price * 0.95).toFixed(2))));
     }
   }, [quote?.current_price, isDerivative, limitPrice]);
+
+  // Check market hours for derivative contracts
+  useEffect(() => {
+    if (!isDerivative || !effectiveContract) return;
+    const mkt = effectiveContract.market || 'IN';
+    const exch = mkt === 'IN' ? 'NSE' : (effectiveContract.instrument_type === 'future' ? 'CME' : 'NASDAQ');
+    fetchMarketStatus(exch).then(res => {
+      setDerivMarketOpen(Boolean(res.is_open));
+    }).catch(() => setDerivMarketOpen(true));
+  }, [isDerivative, effectiveContract]);
 
   if (!ticker && !contract) return null;
 
@@ -584,12 +595,22 @@ export function OrderTicket({
               )}
             </div>
 
+            {/* Market Closed Warning Banner */}
+            {!derivMarketOpen && (
+              <div className="p-2.5 bg-red/10 border border-red/30 text-red text-xs flex items-center space-x-2 font-mono-tabular">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red" />
+                <span>EXCHANGE SESSION CLOSED ({mkt === 'IN' ? 'NSE' : (instType === 'future' ? 'CME' : 'NASDAQ')})</span>
+              </div>
+            )}
+
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={submitting || hasInsufficientCash || hasInsufficientMargin}
+              disabled={submitting || !derivMarketOpen || hasInsufficientCash || hasInsufficientMargin}
               className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none font-mono-tabular ${
-                hasInsufficientCash || hasInsufficientMargin
+                !derivMarketOpen
+                  ? 'bg-base border border-border text-text-muted cursor-not-allowed'
+                  : hasInsufficientCash || hasInsufficientMargin
                   ? 'bg-border text-text-muted cursor-not-allowed'
                   : derivAction.startsWith('buy') || derivAction === 'long'
                   ? 'bg-green hover:bg-green/90 text-black'
@@ -600,6 +621,8 @@ export function OrderTicket({
             >
               {submitting
                 ? 'TRANSMITTING ORDER...'
+                : !derivMarketOpen
+                ? 'MARKET CLOSED'
                 : hasInsufficientCash
                 ? 'INSUFFICIENT FUNDS'
                 : hasInsufficientMargin

@@ -110,6 +110,12 @@ export async function cancelPendingOrder(orderId) {
   return await res.json();
 }
 
+export async function fetchMarketStatus(exchange) {
+  const res = await fetch(`/api/prices/market-status?exchange=${encodeURIComponent(exchange.trim().toUpperCase())}`);
+  if (!res.ok) return { exchange, is_open: true };
+  return await res.json();
+}
+
 export async function validateTicker(symbol) {
   const res = await fetch(`/api/prices/validate?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`);
   if (!res.ok) {
