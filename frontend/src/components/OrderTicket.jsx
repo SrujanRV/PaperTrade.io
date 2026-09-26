@@ -1,10 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X } from 'lucide-react';
-import { placeOrder, calculateSquareOffDate } from '../api/client';
+import { X, Layers, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { placeOrder, placeDerivativeOrder, calculateSquareOffDate } from '../api/client';
 import { LivePriceChart } from './LivePriceChart';
+
+function formatMoney(amount, currency = 'USD') {
+  if (amount === undefined || amount === null || isNaN(amount)) return '0.00';
+  const locale = currency === 'INR' ? 'en-IN' : 'en-US';
+  return Number(amount).toLocaleString(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 export function OrderTicket({
   ticker,
+  contract = null,
   quote,
   wallet,
   onClose,
@@ -12,6 +22,11 @@ export function OrderTicket({
   onOpenWalletSetup,
   onOpenChart,
 }) {
+  // Determine if this ticket is in derivative mode
+  const effectiveContract = contract || (ticker && typeof ticker === 'object' && ticker.isDerivative ? ticker : null);
+  const isDerivative = Boolean(effectiveContract);
+
+  // Common order state
   const [orderType, setOrderType] = useState('market'); // 'market' | 'limit' | 'stop_loss'
   const [side, setSide] = useState('buy'); // 'buy' | 'sell'
   const [quantity, setQuantity] = useState(1);
@@ -21,39 +36,567 @@ export function OrderTicket({
   const [errorMsg, setErrorMsg] = useState(null);
   const [completedOrder, setCompletedOrder] = useState(null);
 
-  // Holding duration state: 'none' | 'intraday' | '1_day' | 'custom'
+  // Derivative-specific action state
+  // Options: 'buy_to_open' | 'sell_to_open' | 'buy_to_close' | 'sell_to_close'
+  // Futures: 'long' | 'short' | 'close'
+  const [derivAction, setDerivAction] = useState('buy_to_open');
+
+  // Holding duration state (for equities)
   const [durationMode, setDurationMode] = useState('none');
   const [customDays, setCustomDays] = useState(2);
   const [calculatedSquareOff, setCalculatedSquareOff] = useState(null);
   const squareOffCacheRef = useRef(new Map());
   const debounceTimerRef = useRef(null);
 
-  // Reset state when ticker changes
+  // Reset state when ticker or contract changes
   useEffect(() => {
     setOrderType('market');
-    setSide('buy');
     setQuantity(1);
-    setLimitPrice(quote?.current_price ? String(quote.current_price) : '');
-    setTriggerPrice(quote?.current_price ? String(Number((quote.current_price * 0.95).toFixed(2))) : '');
+    setErrorMsg(null);
+    setCompletedOrder(null);
     setDurationMode('none');
     setCustomDays(2);
     setCalculatedSquareOff(null);
-    setErrorMsg(null);
-    setCompletedOrder(null);
-  }, [ticker]);
 
-  // Initialize prices when quote first arrives if not already set
-  useEffect(() => {
-    if (quote?.current_price) {
-      setLimitPrice((prev) => (prev ? prev : String(quote.current_price)));
-      setTriggerPrice((prev) =>
-        prev ? prev : String(Number((quote.current_price * 0.95).toFixed(2)))
-      );
+    if (isDerivative) {
+      const initAct = effectiveContract.initial_action ||
+        (effectiveContract.instrument_type === 'future' ? 'long' : 'buy_to_open');
+      setDerivAction(initAct);
+      if (effectiveContract.quantity) {
+        setQuantity(effectiveContract.quantity);
+      }
+      const initialP = effectiveContract.current_price || effectiveContract.price || 0;
+      setLimitPrice(initialP > 0 ? String(initialP) : '');
+    } else {
+      setSide('buy');
+      setLimitPrice(quote?.current_price ? String(quote.current_price) : '');
+      setTriggerPrice(quote?.current_price ? String(Number((quote.current_price * 0.95).toFixed(2))) : '');
     }
-  }, [quote?.current_price]);
+  }, [ticker, contract, isDerivative, effectiveContract]);
 
-  if (!ticker) return null;
+  // Keep limit price initialized when quote arrives
+  useEffect(() => {
+    if (!isDerivative && quote?.current_price && !limitPrice) {
+      setLimitPrice(String(quote.current_price));
+      setTriggerPrice(String(Number((quote.current_price * 0.95).toFixed(2))));
+    }
+  }, [quote?.current_price, isDerivative, limitPrice]);
 
+  if (!ticker && !contract) return null;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DERIVATIVE MODE LOGIC
+  // ══════════════════════════════════════════════════════════════════════════
+  if (isDerivative) {
+    const instType = effectiveContract.instrument_type; // 'option' | 'future'
+    const optType = effectiveContract.option_type; // 'call' | 'put'
+    const lotSize = effectiveContract.lot_size || 1;
+    const mkt = effectiveContract.market || 'IN';
+    const curr = mkt === 'IN' ? 'INR' : 'USD';
+    const currSym = mkt === 'IN' ? '₹' : '$';
+    const und = effectiveContract.underlying || '';
+    const contractSym = effectiveContract.symbol || `${und} CONTRACT`;
+
+    const liveP = effectiveContract.current_price || effectiveContract.price || 0;
+    const effP = orderType === 'limit' && Number(limitPrice) > 0 ? Number(limitPrice) : liveP;
+    const numLots = Math.max(1, Number(quantity) || 1);
+    const totalUnits = numLots * lotSize;
+
+    const cashBalance = wallet?.current_cash_balance ?? 0;
+    const marginUsed = wallet?.margin_used ?? 0;
+    const availableBuyingPower = wallet?.available_buying_power ?? Math.max(0, cashBalance - marginUsed);
+
+    // Covered Call check: does user hold underlying equity in this wallet?
+    const undUpper = und.toUpperCase();
+    const undHolding = wallet?.holdings?.find(
+      (h) => !h.is_short && (h.ticker.toUpperCase() === undUpper || h.ticker.toUpperCase() === `${undUpper}.NS` || h.ticker.toUpperCase() === `${undUpper}.BO`)
+    );
+    const sharesOwned = undHolding ? undHolding.quantity : 0;
+    const isCovered = (instType === 'option' && derivAction === 'sell_to_open') && (sharesOwned >= totalUnits);
+
+    // Margin Requirements
+    let derivMarginReq = 0;
+    let derivTotalCost = 0;
+    let hasInsufficientCash = false;
+    let hasInsufficientMargin = false;
+
+    if (instType === 'option') {
+      if (derivAction === 'buy_to_open') {
+        derivTotalCost = Number((effP * totalUnits).toFixed(2));
+        derivMarginReq = 0;
+        hasInsufficientCash = derivTotalCost > cashBalance;
+      } else if (derivAction === 'sell_to_open') {
+        if (isCovered) {
+          derivMarginReq = 0;
+        } else {
+          // Naked Write: strictly 20% of spot notional
+          const spotP = effectiveContract.underlying_price || effP;
+          const notional = spotP * totalUnits;
+          derivMarginReq = Number((0.20 * notional).toFixed(2));
+          hasInsufficientMargin = derivMarginReq > availableBuyingPower;
+        }
+      }
+    } else {
+      // Future: 12% initial margin on notional
+      if (derivAction === 'long' || derivAction === 'short') {
+        const notional = effP * totalUnits;
+        derivMarginReq = Number((0.12 * notional).toFixed(2));
+        hasInsufficientMargin = derivMarginReq > availableBuyingPower;
+      }
+    }
+
+    const handleDerivSubmit = async (e) => {
+      e.preventDefault();
+      if (hasInsufficientCash) {
+        setErrorMsg(`Insufficient cash balance. Premium requires ${currSym}${formatMoney(derivTotalCost, curr)}, but available cash is ${currSym}${formatMoney(cashBalance, curr)}.`);
+        return;
+      }
+      if (hasInsufficientMargin) {
+        setErrorMsg(`Insufficient buying power. Order requires ${currSym}${formatMoney(derivMarginReq, curr)} margin collateral, but available buying power is ${currSym}${formatMoney(availableBuyingPower, curr)}.`);
+        return;
+      }
+
+      setSubmitting(true);
+      setErrorMsg(null);
+
+      try {
+        let effSide = 'buy';
+        let effAction = 'buy_to_open';
+
+        if (instType === 'option') {
+          if (derivAction === 'buy_to_open') {
+            effSide = 'buy';
+            effAction = 'buy_to_open';
+          } else if (derivAction === 'sell_to_open') {
+            effSide = 'sell';
+            effAction = 'sell_to_open';
+          } else if (derivAction === 'buy_to_close') {
+            effSide = 'buy';
+            effAction = 'buy_to_close';
+          } else if (derivAction === 'sell_to_close') {
+            effSide = 'sell';
+            effAction = 'sell_to_close';
+          }
+        } else {
+          // Future
+          if (derivAction === 'long') {
+            effSide = 'buy';
+            effAction = 'buy_to_open';
+          } else if (derivAction === 'short') {
+            effSide = 'sell';
+            effAction = 'sell_to_open';
+          } else if (derivAction === 'close') {
+            const isShortPos = effectiveContract.existing_side === 'short';
+            effSide = isShortPos ? 'buy' : 'sell';
+            effAction = isShortPos ? 'buy_to_close' : 'sell_to_close';
+          }
+        }
+
+        const payload = {
+          market: mkt,
+          contract_id: effectiveContract.contract_id || null,
+          underlying: und,
+          instrument_type: instType,
+          option_type: optType,
+          strike_price: effectiveContract.strike_price,
+          expiry_date: effectiveContract.expiry_date,
+          lot_size: lotSize,
+          symbol: effectiveContract.symbol,
+          side: effSide,
+          action: effAction,
+          quantity: numLots,
+          order_type: orderType,
+          price: Number(effP) > 0 ? Number(effP) : (orderType === 'limit' ? Number(limitPrice) : null),
+          underlying_price: effectiveContract.underlying_price,
+        };
+
+        const resOrder = await placeDerivativeOrder(payload);
+        if (resOrder.status === 'filled') {
+          setCompletedOrder(resOrder);
+          if (onOrderExecuted) onOrderExecuted(resOrder);
+        } else {
+          setErrorMsg(resOrder.reject_reason || 'Derivative order rejected');
+        }
+      } catch (err) {
+        setErrorMsg(err.message || 'Derivative order execution failed');
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="w-full lg:w-96 bg-surface border border-border flex flex-col font-sans select-none shrink-0 shadow-lg">
+        {/* Header Bar */}
+        <div className="h-10 px-4 bg-[#111317] border-b border-border flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Layers className="w-4 h-4 text-accent" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-text-primary">
+              F&O ORDER TICKET
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 text-text-muted hover:text-text-primary hover:bg-base rounded transition-colors"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Contract Details Header */}
+        <div className="p-4 border-b border-border bg-[#14161b]">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-sm text-text-primary">
+              {contractSym}
+            </span>
+            {instType === 'option' ? (
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono-tabular uppercase tracking-wider border ${
+                optType === 'call'
+                  ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/40'
+                  : 'bg-red-950/40 text-red border-red/40'
+              }`}>
+                OPTION {optType?.toUpperCase()}
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono-tabular uppercase tracking-wider border bg-accent/20 text-accent border-accent/40">
+                FUTURES
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between mt-2 font-mono-tabular text-xs">
+            <span className="text-text-muted">
+              {effectiveContract.expiry_date ? `Exp: ${effectiveContract.expiry_date}` : 'Continuous / Perpetual'}
+            </span>
+            <span className="text-text-primary font-bold text-sm">
+              {currSym}{formatMoney(liveP, curr)}
+            </span>
+          </div>
+        </div>
+
+        {/* Uninitialized Wallet Warning */}
+        {!wallet ? (
+          <div className="p-6 text-center space-y-4 font-mono-tabular">
+            <div className="text-xs text-text-muted">
+              NO {mkt === 'IN' ? 'INDIAN' : 'US'} WALLET INITIALIZED
+            </div>
+            {onOpenWalletSetup && (
+              <button
+                type="button"
+                onClick={() => onOpenWalletSetup(mkt)}
+                className="w-full h-9 bg-accent hover:bg-accent/90 text-white text-xs font-semibold uppercase tracking-wider font-sans"
+              >
+                INITIALIZE {mkt} WALLET
+              </button>
+            )}
+          </div>
+        ) : completedOrder ? (
+          /* Confirmation Screen */
+          <div className="p-5 text-center space-y-4 font-mono-tabular">
+            <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
+              <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
+              <span>ORDER FILLED @ {currSym}{formatMoney(completedOrder.executed_price, curr)}</span>
+            </div>
+            <div className="p-3 bg-base border border-border text-left text-xs space-y-1">
+              <div className="flex justify-between text-text-muted">
+                <span>ORDER ID:</span>
+                <span className="text-text-primary">#{completedOrder.id}</span>
+              </div>
+              <div className="flex justify-between text-text-muted">
+                <span>CONTRACT:</span>
+                <span className="text-text-primary font-bold">{contractSym}</span>
+              </div>
+              <div className="flex justify-between text-text-muted">
+                <span>ACTION:</span>
+                <span className="text-accent uppercase font-bold">{completedOrder.action}</span>
+              </div>
+              <div className="flex justify-between text-text-muted">
+                <span>LOTS / UNITS:</span>
+                <span className="text-text-primary">{completedOrder.quantity} Lots ({completedOrder.quantity * lotSize} units)</span>
+              </div>
+              <div className="flex justify-between text-text-muted">
+                <span>MARGIN LOCKED:</span>
+                <span className="text-amber-400 font-bold">{currSym}{formatMoney(completedOrder.margin_required, curr)}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setCompletedOrder(null)}
+              className="w-full h-8 bg-surface-hover hover:bg-border text-xs text-text-primary uppercase tracking-wider font-semibold transition-colors font-sans"
+            >
+              PLACE ANOTHER ORDER
+            </button>
+          </div>
+        ) : (
+          /* Derivative Order Form */
+          <form onSubmit={handleDerivSubmit} className="p-4 space-y-4 font-sans">
+            {errorMsg && (
+              <div className="p-2.5 bg-red/10 border border-red/40 text-xs font-mono-tabular flex items-start space-x-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0 mt-1.5" />
+                <div className="leading-snug">
+                  <span className="font-semibold block uppercase text-red">ORDER REJECTED</span>
+                  <span className="text-text-primary text-[11px] mt-0.5 block">{errorMsg}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Action Selector Adapted for Derivatives */}
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1 font-mono-tabular">
+                DERIVATIVE ACTION
+              </div>
+              {instType === 'option' ? (
+                <div className="grid grid-cols-2 gap-1 p-1 bg-base border border-border font-mono-tabular">
+                  {[
+                    { id: 'buy_to_open', label: 'BUY TO OPEN' },
+                    { id: 'sell_to_open', label: 'SELL (WRITE)' },
+                    { id: 'buy_to_close', label: 'BUY TO CLOSE' },
+                    { id: 'sell_to_close', label: 'SELL TO CLOSE' },
+                  ].map((act) => (
+                    <button
+                      key={act.id}
+                      type="button"
+                      onClick={() => {
+                        setDerivAction(act.id);
+                        setErrorMsg(null);
+                      }}
+                      className={`h-7 text-[10px] font-bold tracking-wider uppercase transition-colors ${
+                        derivAction === act.id
+                          ? (act.id.startsWith('buy') ? 'bg-green text-black' : 'bg-red text-white')
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      {act.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-1 p-1 bg-base border border-border font-mono-tabular">
+                  {[
+                    { id: 'long', label: 'LONG (BUY)' },
+                    { id: 'short', label: 'SHORT (SELL)' },
+                    { id: 'close', label: 'CLOSE POS' },
+                  ].map((act) => (
+                    <button
+                      key={act.id}
+                      type="button"
+                      onClick={() => {
+                        setDerivAction(act.id);
+                        setErrorMsg(null);
+                      }}
+                      className={`h-7 text-[10px] font-bold tracking-wider uppercase transition-colors ${
+                        derivAction === act.id
+                          ? (act.id === 'long' ? 'bg-green text-black' : act.id === 'short' ? 'bg-red text-white' : 'bg-accent text-white')
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      {act.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quantity in LOTS with Multiplier */}
+            <div>
+              <div className="flex justify-between items-center text-[11px] text-text-muted mb-1 font-mono-tabular">
+                <span className="uppercase tracking-wider">QUANTITY (IN LOTS)</span>
+                <span className="text-[10px] text-accent font-semibold">1 LOT = {lotSize} UNITS</span>
+              </div>
+              <div className="grid grid-cols-5 gap-1.5">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="col-span-2 h-9 px-3 bg-base border border-border text-xs text-text-primary font-mono-tabular focus:border-accent focus:outline-none"
+                />
+                {[1, 2, 5].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setQuantity(preset)}
+                    className={`h-9 text-xs font-mono-tabular border border-border transition-colors ${
+                      Number(quantity) === preset ? 'bg-[#232731] text-accent font-bold' : 'bg-base text-text-muted hover:text-text-primary'
+                    }`}
+                  >
+                    {preset}L
+                  </button>
+                ))}
+              </div>
+              <div className="text-[11px] text-text-muted mt-1 font-mono-tabular">
+                TOTAL CONTRACT UNITS: <span className="text-text-primary font-bold">{totalUnits}</span>
+              </div>
+            </div>
+
+            {/* Order Type: Market vs Limit */}
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1 font-mono-tabular">
+                ORDER TYPE
+              </div>
+              <div className="grid grid-cols-2 gap-1 p-1 bg-base border border-border font-mono-tabular">
+                <button
+                  type="button"
+                  onClick={() => setOrderType('market')}
+                  className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                    orderType === 'market' ? 'bg-[#232731] text-text-primary' : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  MARKET
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderType('limit')}
+                  className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                    orderType === 'limit' ? 'bg-[#232731] text-text-primary' : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  LIMIT
+                </button>
+              </div>
+            </div>
+
+            {orderType === 'limit' && (
+              <div className="font-mono-tabular">
+                <label className="text-[11px] text-text-muted uppercase tracking-wider mb-1 block">
+                  LIMIT PRICE ({currSym})
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  required
+                  value={limitPrice}
+                  onChange={(e) => setLimitPrice(e.target.value)}
+                  className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none"
+                  placeholder={liveP ? String(liveP) : '0.00'}
+                />
+              </div>
+            )}
+
+            {/* ── CRITICAL PRE-SUBMISSION MARGIN IMPACT BANNER ── */}
+            <div className="font-mono-tabular">
+              {instType === 'option' ? (
+                derivAction === 'sell_to_open' ? (
+                  isCovered ? (
+                    <div className="p-3 bg-emerald-950/20 border border-emerald-500/40 text-emerald-400 text-xs space-y-1">
+                      <div className="flex items-center space-x-1.5 font-bold">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>COVERED CALL WRITE</span>
+                      </div>
+                      <div className="text-[11px] text-text-primary">
+                        Using {totalUnits} units of {und} from your holdings ({sharesOwned} held). No additional margin required.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={`p-3 border text-xs space-y-1 ${
+                      hasInsufficientMargin
+                        ? 'bg-red/10 border-red/40 text-red'
+                        : 'bg-amber-500/10 border-amber-500/40 text-amber-400'
+                    }`}>
+                      <div className="flex items-center space-x-1.5 font-bold">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>NAKED WRITE (20% SPOT NOTIONAL)</span>
+                      </div>
+                      <div className="text-[11px] text-text-primary">
+                        Requires <span className="font-bold text-amber-400">{currSym}{formatMoney(derivMarginReq, curr)}</span> margin collateral.
+                      </div>
+                      <div className="text-[10px] text-text-muted flex justify-between">
+                        <span>AVAILABLE BUYING POWER:</span>
+                        <span className={hasInsufficientMargin ? 'text-red font-bold' : 'text-text-primary font-bold'}>
+                          {currSym}{formatMoney(availableBuyingPower, curr)}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                ) : derivAction === 'buy_to_open' ? (
+                  <div className={`p-3 border text-xs space-y-1 ${
+                    hasInsufficientCash ? 'bg-red/10 border-red/40 text-red' : 'bg-base border-border text-text-primary'
+                  }`}>
+                    <div className="flex justify-between">
+                      <span className="text-text-muted">PREMIUM PAYABLE (UPFRONT):</span>
+                      <span className="font-bold text-green">{currSym}{formatMoney(derivTotalCost, curr)}</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted">
+                      Paid directly from cash balance. 0 margin required.
+                    </div>
+                    <div className="flex justify-between text-[10px] text-text-muted pt-1 border-t border-border/40">
+                      <span>CASH AVAILABLE:</span>
+                      <span className={hasInsufficientCash ? 'text-red font-bold' : 'text-text-primary font-bold'}>
+                        {currSym}{formatMoney(cashBalance, curr)}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-2.5 bg-base border border-border text-xs text-text-muted">
+                    CLOSING POSITION — Settles realized P&L and releases locked margin.
+                  </div>
+                )
+              ) : (
+                /* Futures Margin Banner */
+                derivAction === 'close' ? (
+                  <div className="p-2.5 bg-base border border-border text-xs text-text-muted">
+                    CLOSING POSITION — Settles final P&L into cash and releases all locked margin.
+                  </div>
+                ) : (
+                  <div className={`p-3 border text-xs space-y-1 ${
+                    hasInsufficientMargin ? 'bg-red/10 border-red/40 text-red' : 'bg-amber-500/10 border-amber-500/40 text-amber-400'
+                  }`}>
+                    <div className="flex items-center space-x-1.5 font-bold">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>INITIAL MARGIN (12% NOTIONAL)</span>
+                    </div>
+                    <div className="text-[11px] text-text-primary">
+                      Requires <span className="font-bold text-amber-400">{currSym}{formatMoney(derivMarginReq, curr)}</span> margin collateral. Daily cash MTM applies.
+                    </div>
+                    <div className="text-[10px] text-text-muted flex justify-between">
+                      <span>AVAILABLE BUYING POWER:</span>
+                      <span className={hasInsufficientMargin ? 'text-red font-bold' : 'text-text-primary font-bold'}>
+                        {currSym}{formatMoney(availableBuyingPower, curr)}
+                      </span>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={submitting || hasInsufficientCash || hasInsufficientMargin}
+              className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none font-mono-tabular ${
+                hasInsufficientCash || hasInsufficientMargin
+                  ? 'bg-border text-text-muted cursor-not-allowed'
+                  : derivAction.startsWith('buy') || derivAction === 'long'
+                  ? 'bg-green hover:bg-green/90 text-black'
+                  : derivAction === 'close' || derivAction.endsWith('close')
+                  ? 'bg-accent hover:bg-accent/90 text-white'
+                  : 'bg-red hover:bg-red/90 text-white'
+              }`}
+            >
+              {submitting
+                ? 'TRANSMITTING ORDER...'
+                : hasInsufficientCash
+                ? 'INSUFFICIENT FUNDS'
+                : hasInsufficientMargin
+                ? 'INSUFFICIENT MARGIN'
+                : instType === 'option'
+                ? (derivAction === 'buy_to_open' ? `BUY TO OPEN (${quantity} ${quantity === 1 ? 'LOT' : 'LOTS'})`
+                  : derivAction === 'sell_to_open' ? `SELL TO OPEN (${isCovered ? 'COVERED' : 'NAKED'})`
+                  : derivAction === 'buy_to_close' ? 'BUY TO CLOSE'
+                  : 'SELL TO CLOSE')
+                : (derivAction === 'long' ? `GO LONG (${quantity} ${quantity === 1 ? 'LOT' : 'LOTS'})`
+                  : derivAction === 'short' ? `GO SHORT (${quantity} ${quantity === 1 ? 'LOT' : 'LOTS'})`
+                  : 'CLOSE POSITION')}
+            </button>
+          </form>
+        )}
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // EQUITY TICKET MODE (Standard Watchlist / Holding Ticket)
+  // ══════════════════════════════════════════════════════════════════════════
   const upper = ticker.toUpperCase();
   const isIndian = upper.endsWith('.NS') || upper.endsWith('.BO');
   const market = isIndian ? 'IN' : 'US';
@@ -64,7 +607,6 @@ export function OrderTicket({
   const price = quote?.current_price ?? 0;
   const isMarketOpen = quote?.market_status === 'open';
 
-  // Effective price for calculation
   const effectivePrice =
     orderType === 'limit' && Number(limitPrice) > 0
       ? Number(limitPrice)
@@ -75,15 +617,12 @@ export function OrderTicket({
   const totalCost = Number((effectivePrice * (Number(quantity) || 0)).toFixed(2));
   const cashBalance = wallet?.current_cash_balance ?? 0;
 
-  // Check available holding if selling or covering
   const existingHolding = wallet?.holdings?.find(
     (h) => h.ticker.toUpperCase() === upper
   );
   const isHoldingShort = Boolean(existingHolding?.is_short);
   const ownedQuantity = isHoldingShort ? 0 : (existingHolding?.quantity ?? 0);
-  const shortQuantityHeld = isHoldingShort ? (existingHolding?.quantity ?? 0) : 0;
 
-  // Short selling & cover buy operation flags
   const isShortSellOperation =
     side === 'sell' &&
     orderType !== 'stop_loss' &&
@@ -93,13 +632,10 @@ export function OrderTicket({
     ? (Number(quantity) || 0)
     : Math.max(0, (Number(quantity) || 0) - ownedQuantity);
 
-  const isCoverBuyOperation =
-    side === 'buy' && isHoldingShort;
-
+  const isCoverBuyOperation = side === 'buy' && isHoldingShort;
   const isUSShort = market === 'US' && isShortSellOperation;
   const isINShort = market === 'IN' && isShortSellOperation;
 
-  // Margin requirements
   const requiredShortMargin = isUSShort
     ? Number((1.5 * effectivePrice * shortQty).toFixed(2))
     : isINShort
@@ -110,7 +646,6 @@ export function OrderTicket({
     ? (wallet?.available_buying_power ?? Math.max(0, (wallet?.current_cash_balance ?? 0) - (wallet?.margin_used ?? 0)))
     : cashBalance;
 
-  // Fetch resolved square-off date with in-memory caching and debouncing
   const fetchResolvedDate = useCallback((mkt, days) => {
     const cacheKey = `${mkt}:${days}`;
     if (squareOffCacheRef.current.has(cacheKey)) {
@@ -138,7 +673,6 @@ export function OrderTicket({
     const days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
     const cacheKey = `${market}:${days}`;
 
-    // Instant update if in cache
     if (squareOffCacheRef.current.has(cacheKey)) {
       setCalculatedSquareOff(squareOffCacheRef.current.get(cacheKey));
       return;
@@ -154,7 +688,6 @@ export function OrderTicket({
     };
   }, [side, isCoverBuyOperation, isShortSellOperation, durationMode, customDays, market, fetchResolvedDate]);
 
-  // Validation checks
   const hasInsufficientFunds = side === 'buy' && totalCost > cashBalance;
   const hasInsufficientMargin = isShortSellOperation && requiredShortMargin > availableBuyingPower;
   const hasInsufficientHoldings =
@@ -162,69 +695,32 @@ export function OrderTicket({
 
   async function handleOrderSubmit(e) {
     e.preventDefault();
-    setErrorMsg(null);
-    setCompletedOrder(null);
-
+    if (orderType === 'market' && !isMarketOpen) {
+      setErrorMsg('Market is closed. Market orders are only accepted during active trading hours.');
+      return;
+    }
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
-      setErrorMsg('Please enter a valid quantity greater than zero.');
+      setErrorMsg('Quantity must be a positive integer.');
       return;
     }
-
-    if (orderType === 'market' && !isMarketOpen) {
-      setErrorMsg('Market is currently closed. Market orders require regular market hours.');
-      return;
-    }
-
-    if (orderType === 'limit') {
-      const lp = Number(limitPrice);
-      if (!lp || lp <= 0) {
-        setErrorMsg('Please enter a valid limit price greater than zero.');
-        return;
-      }
-    }
-
-    if (orderType === 'stop_loss') {
-      if (side !== 'sell') {
-        setErrorMsg('Stop-loss orders are sell-only to protect existing positions.');
-        return;
-      }
-      const tp = Number(triggerPrice);
-      if (!tp || tp <= 0) {
-        setErrorMsg('Please enter a valid trigger price greater than zero.');
-        return;
-      }
-    }
-
     if (hasInsufficientFunds) {
-      setErrorMsg(
-        `Insufficient funds. Estimated total is ${currencySymbol}${totalCost.toLocaleString()} but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
-      );
+      setErrorMsg(`Insufficient funds. Estimated total is ${currencySymbol}${totalCost.toLocaleString()} but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`);
       return;
     }
-
     if (hasInsufficientMargin) {
-      if (isUSShort) {
-        setErrorMsg(
-          `Insufficient buying power. Opening this short position requires 150% initial margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available buying power is ${currencySymbol}${availableBuyingPower.toLocaleString()}.`
-        );
-      } else {
-        setErrorMsg(
-          `Insufficient margin. Opening this short position requires 1x cash margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
-        );
-      }
+      setErrorMsg(isUSShort
+        ? `Insufficient buying power. Opening this short position requires 150% initial margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available buying power is ${currencySymbol}${availableBuyingPower.toLocaleString()}.`
+        : `Insufficient margin. Opening this short position requires 1x cash margin of ${currencySymbol}${requiredShortMargin.toLocaleString()}, but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`
+      );
       return;
     }
-
     if (hasInsufficientHoldings) {
-      setErrorMsg(
-        `Insufficient holdings. Stop-loss orders can only protect shares you currently hold (${ownedQuantity} shares).`
-      );
+      setErrorMsg(`Insufficient holdings. Stop-loss orders can only protect shares you currently hold (${ownedQuantity} shares).`);
       return;
     }
 
     setSubmitting(true);
-
     try {
       const orderPayload = {
         market,
@@ -236,263 +732,117 @@ export function OrderTicket({
         trigger_price: orderType === 'stop_loss' ? Number(triggerPrice) : null,
       };
 
-      if (
-        ((side === 'buy' && !isCoverBuyOperation) || isUSShort) &&
-        durationMode !== 'none' &&
-        calculatedSquareOff
-      ) {
+      if (((side === 'buy' && !isCoverBuyOperation) || isUSShort) && durationMode !== 'none' && calculatedSquareOff) {
         orderPayload.holding_days = durationMode === 'intraday' ? 0 : durationMode === '1_day' ? 1 : customDays;
         orderPayload.square_off_date = calculatedSquareOff.square_off_date;
         orderPayload.is_intraday = durationMode === 'intraday';
       }
 
       const order = await placeOrder(orderPayload);
-
       if (order.status === 'filled' || order.status === 'pending') {
         setCompletedOrder(order);
-        if (onOrderExecuted) {
-          onOrderExecuted(order);
-        }
+        if (onOrderExecuted) onOrderExecuted(order);
       } else {
-        // Map reject_reason to user-friendly terminal explanation
-        const reasons = {
-          market_closed: 'Market is closed. Trading is only permitted during regular market hours.',
-          insufficient_funds: `Insufficient funds in ${currency} wallet to complete this purchase.`,
-          insufficient_margin: isUSShort
-            ? `Insufficient available buying power for US 150% margin requirement.`
-            : `Insufficient cash balance to meet the 1x margin requirement for short selling.`,
-          insufficient_holdings: `Insufficient holdings. You do not hold enough shares of ${upper} to sell.`,
-          intraday_only_for_short: `Short selling is intraday-only in Indian equities. Multi-day duration is not permitted.`,
-          us_short_not_supported: `US short selling rejected. Please check available buying power.`,
-          no_short_position: `No open short position to cover.`,
-          invalid_ticker: `Invalid ticker symbol. Unable to fetch executable quote from exchange.`,
-          wrong_market: `Ticker / wallet mismatch.`,
-          stop_loss_sell_only: `Stop-loss orders can only be placed on the SELL side.`,
-          invalid_limit_price: `Invalid limit price specified.`,
-          invalid_trigger_price: `Invalid trigger price specified.`,
-        };
-        setErrorMsg(
-          reasons[order.reject_reason] ||
-            `Order rejected by exchange: ${order.reject_reason || 'Unknown reason'}`
-        );
+        setErrorMsg(order.reject_reason || 'Order rejected');
       }
     } catch (err) {
-      setErrorMsg(err.message || 'Transmission error while sending order to engine.');
+      setErrorMsg(err.message || 'Order submission failed');
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="w-80 sm:w-96 bg-surface border border-border flex flex-col select-none text-text-primary h-fit shadow-xl">
-      {/* Ticket Header */}
-      <div className="h-10 px-3 bg-[#111317] border-b border-border flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <span className="text-xs font-semibold tracking-wider text-text-primary uppercase">
-            Order Ticket
-          </span>
-          <span className="text-[10px] font-mono-tabular text-text-muted px-1 bg-base border border-border">
-            {exchange}
-          </span>
-        </div>
+    <div className="w-full lg:w-80 bg-surface border border-border flex flex-col font-sans select-none shrink-0 shadow-lg">
+      {/* Header Bar */}
+      <div className="h-10 px-4 bg-[#111317] border-b border-border flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-text-primary">
+          ORDER TICKET
+        </span>
         <button
           onClick={onClose}
-          className="p-1 text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+          className="p-1 text-text-muted hover:text-text-primary hover:bg-base rounded transition-colors"
         >
-          <X className="w-3.5 h-3.5" />
+          <X size={15} />
         </button>
       </div>
 
-      {/* Asset Info & Live Price */}
-      <div className="p-4 border-b border-border bg-[#0f1115]">
-        <div className="flex items-baseline justify-between">
-          <div>
-            <div className="text-base font-bold tracking-tight text-text-primary">
-              {upper}
-            </div>
-            <div className="text-[11px] font-mono-tabular text-text-muted mt-0.5">
-              Market: {market} ({currency})
-            </div>
-          </div>
-
-          <div className="text-right font-mono-tabular">
-            <div className="text-base font-semibold text-text-primary">
-              {currencySymbol}
-              {price.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
-            </div>
-            <div className="flex items-center justify-end space-x-1 mt-0.5">
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isMarketOpen ? 'bg-green' : 'bg-[#525866]'
-                }`}
-              />
-              <span
-                className={`text-[10px] uppercase font-medium ${
-                  isMarketOpen ? 'text-green' : 'text-text-muted'
-                }`}
-              >
-                {isMarketOpen ? 'OPEN' : 'CLOSED'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Market Closed Warning */}
-        {!isMarketOpen && (
-          <div className="mt-3 p-2 bg-[#1b1c20] border border-border text-[11px] text-text-muted flex items-center space-x-2 font-mono-tabular">
-            <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0" />
-            <span>
-              <strong className="text-red uppercase font-semibold mr-1.5">MARKET CLOSED —</strong>
-              order execution blocked until session open.
+      {/* Asset Metadata Header */}
+      <div className="p-4 border-b border-border bg-[#14161b]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-base text-text-primary">{upper}</span>
+            <span className="text-[10px] font-mono-tabular px-1.5 py-0.5 bg-base border border-border text-text-muted">
+              {exchange}
             </span>
           </div>
-        )}
+          {onOpenChart && (
+            <button
+              type="button"
+              onClick={() => onOpenChart(upper)}
+              className="text-[10px] text-accent hover:underline uppercase tracking-wider font-semibold"
+            >
+              FULL CHART
+            </button>
+          )}
+        </div>
+        <div className="flex items-center justify-between mt-2 font-mono-tabular">
+          <span className="text-sm font-bold text-text-primary">
+            {currencySymbol}{price > 0 ? price.toFixed(2) : '—'}
+          </span>
+          <span className={`text-[10px] uppercase font-semibold ${isMarketOpen ? 'text-green' : 'text-text-muted'}`}>
+            {isMarketOpen ? '● MARKET OPEN' : '○ MARKET CLOSED'}
+          </span>
+        </div>
       </div>
 
-      {/* Live Session Price Chart (Lightweight Charts) */}
-      <LivePriceChart
-        ticker={upper}
-        quote={quote}
-        currencySymbol={currencySymbol}
-        onExpandChart={onOpenChart}
-      />
-
-      {/* Missing Wallet Inline Notice */}
+      {/* Uninitialized Wallet Warning */}
       {!wallet ? (
-        <div className="p-5 bg-[#121418] border-t border-border space-y-4 font-mono-tabular">
-          <div className="flex items-start space-x-2.5">
-            <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1" />
-            <div>
-              <div className="text-xs font-semibold text-text-primary uppercase tracking-wider">
-                NO {market} WALLET INITIALIZED
-              </div>
-              <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
-                You need a {currency} paper trading wallet to place orders for{' '}
-                <span className="text-text-primary font-semibold">{upper}</span>. Set up a starting balance to begin trading.
-              </div>
-            </div>
+        <div className="p-6 text-center space-y-4 font-mono-tabular">
+          <div className="text-xs text-text-muted">
+            NO {market === 'IN' ? 'INDIAN' : 'US'} WALLET INITIALIZED
           </div>
-
-          <div className="p-3 bg-base border border-border text-[11px] text-text-muted space-y-1">
-            <div className="flex justify-between">
-              <span>REQUIRED ASSET:</span>
-              <span className="text-text-primary font-semibold">{upper}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>MARKET EXCH:</span>
-              <span className="text-text-primary">{exchange}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>CURRENCY:</span>
-              <span className="text-text-primary">{currency}</span>
-            </div>
-          </div>
-
-          <div className="pt-2 space-y-2">
+          {onOpenWalletSetup && (
             <button
               type="button"
-              onClick={() => onOpenWalletSetup && onOpenWalletSetup(market)}
-              className="w-full h-9 bg-accent hover:bg-accent/90 text-white text-xs font-semibold uppercase tracking-wider transition-colors select-none"
+              onClick={() => onOpenWalletSetup(market)}
+              className="w-full h-9 bg-accent hover:bg-accent/90 text-white text-xs font-semibold uppercase tracking-wider font-sans"
             >
-              SET UP {market} WALLET
+              INITIALIZE {market} WALLET
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full h-8 bg-base hover:bg-surface-hover border border-border text-text-muted hover:text-text-primary text-xs font-semibold uppercase tracking-wider transition-colors select-none"
-            >
-              DISMISS & BROWSE WATCHLIST
-            </button>
-          </div>
+          )}
         </div>
       ) : completedOrder ? (
+        /* Confirmation Screen */
         <div className="p-5 text-center space-y-4 font-mono-tabular">
-          {completedOrder.status === 'filled' ? (
-            <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
-              <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
-              <span>
-                ORDER FILLED @ {currencySymbol}
-                {Number(completedOrder.executed_price).toFixed(2)}
-              </span>
-            </div>
-          ) : (
-            <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-accent uppercase">
-              <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_6px_rgba(59,130,246,0.6)] animate-pulse" />
-              <span>PENDING ORDER CREATED</span>
-            </div>
-          )}
-
-          <div>
-            <p className="text-[11px] text-text-muted">
-              {completedOrder.order_type.toUpperCase()} {completedOrder.side.toUpperCase()} {completedOrder.quantity} {upper}
-            </p>
+          <div className="inline-flex items-center space-x-2 text-xs font-semibold tracking-wider text-green uppercase">
+            <span className="w-2 h-2 rounded-full bg-green shadow-[0_0_6px_rgba(0,192,118,0.6)]" />
+            <span>ORDER FILLED @ {currencySymbol}{Number(completedOrder.executed_price).toFixed(2)}</span>
           </div>
-
           <div className="p-3 bg-base border border-border text-left text-xs space-y-1">
             <div className="flex justify-between text-text-muted">
               <span>ORDER ID:</span>
               <span className="text-text-primary">#{completedOrder.id}</span>
             </div>
             <div className="flex justify-between text-text-muted">
-              <span>STATUS:</span>
-              <span
-                className={`uppercase font-semibold ${
-                  completedOrder.status === 'filled' ? 'text-green' : 'text-accent'
-                }`}
-              >
-                {completedOrder.status === 'filled' ? 'FILLED' : 'PENDING TRIGGER'}
-              </span>
+              <span>ACTION:</span>
+              <span className="text-text-primary uppercase font-bold">{completedOrder.side}</span>
             </div>
-            {completedOrder.status === 'filled' ? (
-              <div className="flex justify-between text-text-muted">
-                <span>TOTAL:</span>
-                <span className="text-text-primary">
-                  {currencySymbol}
-                  {(completedOrder.executed_price * completedOrder.quantity).toFixed(2)}
-                </span>
-              </div>
-            ) : (
-              <div className="flex justify-between text-text-muted">
-                <span>TARGET:</span>
-                <span className="text-text-primary font-semibold">
-                  {completedOrder.order_type === 'limit'
-                    ? completedOrder.side === 'buy'
-                      ? `≤ ${currencySymbol}${Number(completedOrder.requested_price).toFixed(2)}`
-                      : `≥ ${currencySymbol}${Number(completedOrder.requested_price).toFixed(2)}`
-                    : `≤ ${currencySymbol}${Number(completedOrder.trigger_price).toFixed(2)}`}
-                </span>
-              </div>
-            )}
-            {completedOrder.square_off_date && (
-              <div className="flex justify-between text-text-muted border-t border-border/40 pt-1">
-                <span>AUTO SQUARE-OFF:</span>
-                <span className="text-accent font-semibold">
-                  {completedOrder.square_off_date} {completedOrder.is_intraday ? '(INTRADAY)' : ''}
-                </span>
-              </div>
-            )}
+            <div className="flex justify-between text-text-muted">
+              <span>QUANTITY:</span>
+              <span className="text-text-primary">{completedOrder.quantity}</span>
+            </div>
           </div>
-
-          {completedOrder.status === 'pending' && (
-            <p className="text-[10px] text-text-muted leading-tight">
-              Order will trigger and execute against live price ticks when regular market hours are open.
-            </p>
-          )}
-
           <button
             onClick={() => setCompletedOrder(null)}
-            className="w-full h-8 bg-surface-hover hover:bg-border text-xs text-text-primary uppercase tracking-wider font-semibold transition-colors"
+            className="w-full h-8 bg-surface-hover hover:bg-border text-xs text-text-primary uppercase tracking-wider font-semibold transition-colors font-sans"
           >
             PLACE ANOTHER ORDER
           </button>
         </div>
       ) : (
-        /* Order Form */
+        /* Equity Order Form */
         <form onSubmit={handleOrderSubmit} className="p-4 space-y-4">
-          {/* Error / Rejection Banner */}
           {errorMsg && (
             <div className="p-2.5 bg-red/10 border border-red/40 text-xs font-mono-tabular flex items-start space-x-2">
               <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0 mt-1.5" />
@@ -508,39 +858,28 @@ export function OrderTicket({
             <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1 font-mono-tabular">
               ORDER TYPE
             </div>
-            <div className="grid grid-cols-3 gap-1 p-1 bg-base border border-border">
-              {[
-                { id: 'market', label: 'MARKET' },
-                { id: 'limit', label: 'LIMIT' },
-                { id: 'stop_loss', label: 'STOP-LOSS' },
-              ].map((t) => {
-                const active = orderType === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => {
-                      setOrderType(t.id);
-                      setErrorMsg(null);
-                      if (t.id === 'stop_loss') {
-                        setSide('sell');
-                      }
-                    }}
-                    className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
-                      active
-                        ? 'bg-border text-text-primary'
-                        : 'text-text-muted hover:text-text-primary'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-3 gap-1 p-1 bg-base border border-border font-mono-tabular">
+              {['market', 'limit', 'stop_loss'].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    setOrderType(t);
+                    setErrorMsg(null);
+                    if (t === 'stop_loss') setSide('sell');
+                  }}
+                  className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                    orderType === t ? 'bg-[#232731] text-text-primary' : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  {t.replace('_', '-')}
+                </button>
+              ))}
             </div>
           </div>
 
           {/* Buy / Sell Segmented Control */}
-          <div className="grid grid-cols-2 gap-1 p-1 bg-base border border-border">
+          <div className="grid grid-cols-2 gap-1 p-1 bg-base border border-border font-mono-tabular">
             <button
               type="button"
               disabled={orderType === 'stop_loss'}
@@ -565,318 +904,73 @@ export function OrderTicket({
                 setErrorMsg(null);
               }}
               className={`h-8 text-xs font-semibold tracking-wider uppercase transition-colors ${
-                side === 'sell'
-                  ? 'bg-red text-white'
-                  : 'text-text-muted hover:text-text-primary'
+                side === 'sell' ? 'bg-red text-white' : 'text-text-muted hover:text-text-primary'
               }`}
             >
               SELL
             </button>
           </div>
 
-          {/* Limit Price Input */}
+          {/* Limit Price */}
           {orderType === 'limit' && (
             <div className="font-mono-tabular">
-              <div className="flex justify-between items-center text-[11px] text-text-muted mb-1.5">
-                <label className="uppercase tracking-wider">
-                  LIMIT PRICE ({currencySymbol})
-                </label>
-                <span className="text-[10px]">
-                  {side === 'buy' ? 'Fill if price ≤' : 'Fill if price ≥'}
-                </span>
-              </div>
+              <label className="text-[11px] text-text-muted uppercase tracking-wider mb-1 block">
+                LIMIT PRICE ({currencySymbol})
+              </label>
               <input
                 type="number"
                 step="any"
                 required
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none"
                 placeholder={price ? price.toFixed(2) : '0.00'}
               />
             </div>
           )}
 
-          {/* Trigger Price Input for Stop-Loss */}
-          {orderType === 'stop_loss' && (
-            <div className="font-mono-tabular">
-              <div className="flex justify-between items-center text-[11px] text-text-muted mb-1.5">
-                <label className="uppercase tracking-wider">
-                  STOP TRIGGER PRICE ({currencySymbol})
-                </label>
-                <span className="text-[10px] text-accent">
-                  Triggers sell if price ≤
-                </span>
-              </div>
-              <input
-                type="number"
-                step="any"
-                required
-                value={triggerPrice}
-                onChange={(e) => setTriggerPrice(e.target.value)}
-                className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-                placeholder={price ? (price * 0.95).toFixed(2) : '0.00'}
-              />
+          {/* Quantity */}
+          <div>
+            <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1 font-mono-tabular">
+              SHARES QUANTITY
             </div>
-          )}
-
-          {/* Quantity Input */}
-          <div className="font-mono-tabular">
-            <div className="flex justify-between items-center text-[11px] text-text-muted mb-1.5">
-              <label className="uppercase tracking-wider">Quantity</label>
-              {side === 'sell' && (
-                <span>
-                  Owned: <strong className="text-text-primary">{ownedQuantity}</strong>
-                </span>
-              )}
-            </div>
-            <div className="flex items-center space-x-2">
-              <input
-                type="number"
-                min="1"
-                step="1"
-                required
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                className="flex-1 h-9 px-3 bg-base border border-border text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-            </div>
-
-            {/* Quick quantity presets */}
-            <div className="grid grid-cols-4 gap-1 mt-1.5">
-              {[1, 5, 10, 50].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setQuantity(preset)}
-                  className="h-6 bg-base border border-border text-[10px] text-text-muted hover:text-text-primary hover:border-text-muted transition-colors"
-                >
-                  +{preset}
-                </button>
-              ))}
-            </div>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              required
+              value={quantity}
+              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-full h-9 px-3 bg-base border border-border text-xs text-text-primary font-mono-tabular focus:border-accent focus:outline-none"
+            />
           </div>
 
-          {/* Short Sell Warning & Info Banners */}
-          {isINShort && (
-            <div className="p-2.5 bg-accent/10 border border-accent/40 text-[11px] space-y-1 font-mono-tabular">
-              <div className="flex items-center space-x-1.5 font-bold text-accent">
-                <span>⚡ INTRADAY SHORT POSITION (NSE/BSE)</span>
-              </div>
-              <div className="text-[10px] text-text-muted leading-tight">
-                Short selling is strictly intraday on Indian equities. Auto squared-off at 15:15 IST before session close. 1x cash margin required.
-              </div>
-            </div>
-          )}
-
-          {isUSShort && (
-            <div className="p-2.5 bg-accent/10 border border-accent/40 text-[11px] space-y-1 font-mono-tabular">
-              <div className="flex items-center justify-between font-bold text-accent">
-                <span>⚡ US REG T MARGIN SHORT</span>
-                <span className="text-[10px] px-1 bg-accent/20 border border-accent/30 text-accent font-semibold">
-                  150% MARGIN
-                </span>
-              </div>
-              <div className="text-[10px] text-text-muted leading-tight">
-                Requires 150% initial margin ({currencySymbol}{requiredShortMargin.toFixed(2)}). Position can be held overnight. Maintenance threshold is 125% of market value (force-liquidated if breached).
-              </div>
-            </div>
-          )}
-
-          {/* Cover Buy Info Banner */}
-          {isCoverBuyOperation && (
-            <div className="p-2.5 bg-green/10 border border-green/40 text-[11px] space-y-1 font-mono-tabular">
-              <div className="flex items-center space-x-1.5 font-bold text-green">
-                <span>🛡️ COVER BUY (SQUARE-OFF SHORT)</span>
-              </div>
-              <div className="text-[10px] text-text-muted leading-tight">
-                You currently hold a SHORT position of {shortQuantityHeld} shares. This BUY order will buy back shares to close your short liability.
-              </div>
-            </div>
-          )}
-
-          {/* Holding Duration Selector (BUY side, or US Short side) */}
-          {((side === 'buy' && !isCoverBuyOperation) || isUSShort) && (
-            <div className="font-mono-tabular space-y-2">
-              <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-wider">
-                <span>HOLDING DURATION</span>
-                <span className="text-[9px] text-[#707788]">
-                  {durationMode === 'none'
-                    ? 'OPEN-ENDED HOLD'
-                    : durationMode === 'intraday'
-                    ? 'AUTO SQUARES OFF TODAY'
-                    : `SQUARES OFF IN ${durationMode === '1_day' ? '1 TRADING DAY' : `${customDays} TRADING DAYS`}`}
-                </span>
-              </div>
-
-              {/* Segmented Duration Buttons */}
-              <div className="grid grid-cols-4 gap-1 p-1 bg-base border border-border">
-                {[
-                  { id: 'none', label: 'NONE' },
-                  { id: 'intraday', label: 'INTRADAY' },
-                  { id: '1_day', label: '1 DAY' },
-                  { id: 'custom', label: 'CUSTOM' },
-                ].map((d) => {
-                  const active = durationMode === d.id;
-                  return (
-                    <button
-                      key={d.id}
-                      type="button"
-                      onClick={() => setDurationMode(d.id)}
-                      className={`h-7 text-[10px] font-semibold tracking-wider uppercase transition-colors ${
-                        active
-                          ? 'bg-border text-text-primary'
-                          : 'text-text-muted hover:text-text-primary'
-                      }`}
-                    >
-                      {d.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Custom Days Input Stepper */}
-              {durationMode === 'custom' && (
-                <div className="flex items-center space-x-2 pt-0.5">
-                  <label className="text-[11px] text-text-muted uppercase">
-                    Trading Days:
-                  </label>
-                  <div className="flex items-center space-x-1">
-                    <button
-                      type="button"
-                      onClick={() => setCustomDays((prev) => Math.max(1, prev - 1))}
-                      className="w-7 h-7 bg-base border border-border text-xs text-text-primary hover:bg-surface transition-colors flex items-center justify-center font-bold"
-                    >
-                      -
-                    </button>
-                    <input
-                      type="number"
-                      min="1"
-                      max="90"
-                      value={customDays}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        if (!isNaN(val) && val >= 1) setCustomDays(val);
-                      }}
-                      className="w-14 h-7 bg-base border border-border text-center text-xs font-semibold text-text-primary focus:outline-none focus:border-accent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setCustomDays((prev) => Math.min(90, prev + 1))}
-                      className="w-7 h-7 bg-base border border-border text-xs text-text-primary hover:bg-surface transition-colors flex items-center justify-center font-bold"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Resolved Square-Off Date & Shift Warning */}
-              {durationMode !== 'none' && calculatedSquareOff && (
-                <div className="p-2.5 bg-[#12151b] border border-border/80 text-[11px] space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-text-muted">AUTO SQUARE-OFF:</span>
-                    <span className="text-accent font-semibold">
-                      {calculatedSquareOff.formatted_date} (~{market === 'IN' ? '3:15 PM IST' : '3:45 PM ET'})
-                    </span>
-                  </div>
-                  {calculatedSquareOff.is_shifted && calculatedSquareOff.shift_reason && (
-                    <div className="text-[10px] text-amber-400/90 leading-tight pt-0.5">
-                      ⚠️ {calculatedSquareOff.shift_reason}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Cost Breakdown */}
-          <div className="p-3 bg-base border border-border space-y-1.5 text-xs font-mono-tabular">
+          {/* Estimated Total & Buying Power */}
+          <div className="p-3 bg-base border border-border font-mono-tabular text-xs space-y-1">
             <div className="flex justify-between text-text-muted">
-              <span>ORDER TYPE:</span>
-              <span className="text-text-primary font-medium uppercase">{orderType.replace('_', '-')}</span>
+              <span>ESTIMATED VALUE:</span>
+              <span className="text-text-primary font-bold">{currencySymbol}{formatMoney(totalCost, currency)}</span>
             </div>
             <div className="flex justify-between text-text-muted">
-              <span>
-                {orderType === 'limit'
-                  ? 'LIMIT PRICE:'
-                  : orderType === 'stop_loss'
-                  ? 'TRIGGER PRICE:'
-                  : 'CURRENT PRICE:'}
-              </span>
-              <span className="text-text-primary">
-                {currencySymbol}
-                {effectivePrice.toFixed(2)}
+              <span>AVAILABLE FUNDS:</span>
+              <span className={hasInsufficientFunds || hasInsufficientMargin ? 'text-red font-bold' : 'text-text-primary font-bold'}>
+                {currencySymbol}{formatMoney(isUSShort ? availableBuyingPower : cashBalance, currency)}
               </span>
             </div>
-            <div className="flex justify-between text-text-muted border-t border-border/60 pt-1.5">
-              <span className="font-medium text-text-primary">
-                {isUSShort
-                  ? 'INITIAL MARGIN REQUIRED (150%):'
-                  : isINShort
-                  ? 'SHORT SALE PROCEEDS (1X MARGIN):'
-                  : isCoverBuyOperation
-                  ? 'EST. COVER COST:'
-                  : side === 'buy'
-                  ? 'EST. TOTAL COST:'
-                  : 'EST. PROCEEDS:'}
-              </span>
-              <span className="font-semibold text-text-primary">
-                {currencySymbol}
-                {(isUSShort ? requiredShortMargin : totalCost).toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-            </div>
-            {isUSShort && (
-              <div className="flex justify-between text-[11px] text-text-muted">
-                <span>EST. SALE PROCEEDS (CREDITED):</span>
-                <span className="text-green font-medium">
-                  +{currencySymbol}
-                  {totalCost.toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-              </div>
-            )}
-            {(side === 'buy' || isShortSellOperation) && (
-              <div className="flex justify-between text-[11px] text-text-muted pt-0.5">
-                <span>{isUSShort ? 'AVAILABLE BUYING POWER:' : 'AVAILABLE CASH:'}</span>
-                <span className={hasInsufficientFunds || hasInsufficientMargin ? 'text-red font-medium' : 'text-text-primary font-medium'}>
-                  {currencySymbol}
-                  {(isUSShort ? availableBuyingPower : cashBalance).toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-              </div>
-            )}
           </div>
 
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={
-              submitting ||
-              (orderType === 'market' && !isMarketOpen) ||
-              hasInsufficientFunds ||
-              hasInsufficientMargin ||
-              hasInsufficientHoldings
-            }
-            className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none ${
+            disabled={submitting || (orderType === 'market' && !isMarketOpen) || hasInsufficientFunds || hasInsufficientMargin}
+            className={`w-full h-10 text-xs font-bold tracking-wider uppercase transition-colors select-none font-mono-tabular ${
               orderType === 'market' && !isMarketOpen
                 ? 'bg-border text-text-muted cursor-not-allowed'
-                : hasInsufficientFunds || hasInsufficientMargin || hasInsufficientHoldings
+                : hasInsufficientFunds || hasInsufficientMargin
                 ? 'bg-border text-text-muted cursor-not-allowed'
-                : isCoverBuyOperation
-                ? 'bg-green hover:bg-green/90 text-black disabled:opacity-50 disabled:cursor-not-allowed'
-                : isShortSellOperation
-                ? 'bg-red hover:bg-red/90 text-white disabled:opacity-50 disabled:cursor-not-allowed'
                 : side === 'buy'
-                ? 'bg-green hover:bg-green/90 text-black disabled:opacity-50 disabled:cursor-not-allowed'
-                : 'bg-red hover:bg-red/90 text-white disabled:opacity-50 disabled:cursor-not-allowed'
+                ? 'bg-green hover:bg-green/90 text-black'
+                : 'bg-red hover:bg-red/90 text-white'
             }`}
           >
             {submitting
@@ -886,18 +980,8 @@ export function OrderTicket({
               : hasInsufficientFunds
               ? 'INSUFFICIENT FUNDS'
               : hasInsufficientMargin
-              ? (isUSShort ? 'INSUFFICIENT BUYING POWER' : 'INSUFFICIENT MARGIN')
-              : hasInsufficientHoldings
-              ? 'INSUFFICIENT HOLDINGS'
-              : isCoverBuyOperation
-              ? `COVER BUY ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
-              : isShortSellOperation
-              ? `SHORT SELL ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
-              : orderType === 'market'
-              ? `${side.toUpperCase()} ${quantity} ${upper} // ${currencySymbol}${totalCost.toFixed(2)}`
-              : orderType === 'limit'
-              ? `SUBMIT LIMIT ${side.toUpperCase()} // ${currencySymbol}${effectivePrice.toFixed(2)}`
-              : `SUBMIT STOP-LOSS SELL // ${currencySymbol}${effectivePrice.toFixed(2)}`}
+              ? 'INSUFFICIENT MARGIN'
+              : `${side.toUpperCase()} ${quantity} ${upper}`}
           </button>
         </form>
       )}

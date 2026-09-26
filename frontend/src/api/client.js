@@ -214,6 +214,121 @@ export async function triggerAutoSquareOff(market = null) {
   return await res.json();
 }
 
+// ── Derivatives (F&O) API ────────────────────────────────────────────────────
+
+export async function fetchOptionChain(market = 'IN', symbol = 'NIFTY', expiry = null) {
+  let url = `/api/derivatives/chain?market=${encodeURIComponent(market)}&symbol=${encodeURIComponent(symbol)}`;
+  if (expiry) {
+    url += `&expiry=${encodeURIComponent(expiry)}`;
+  }
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch option chain for ${symbol}`);
+  }
+  return await res.json();
+}
+
+export async function fetchFuturesMarket(market = 'IN', symbol = null) {
+  let url = `/api/derivatives/futures?market=${encodeURIComponent(market)}`;
+  if (symbol) {
+    url += `&symbol=${encodeURIComponent(symbol)}`;
+  }
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch futures market for ${market}`);
+  }
+  return await res.json();
+}
+
+export async function fetchDerivativePositions(market = 'IN') {
+  const res = await fetch(`/api/derivatives/${encodeURIComponent(market)}/positions`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch derivative positions for ${market}`);
+  }
+  return await res.json();
+}
+
+export async function fetchDerivativeOrders(market = 'IN') {
+  const res = await fetch(`/api/derivatives/${encodeURIComponent(market)}/orders`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch derivative orders for ${market}`);
+  }
+  return await res.json();
+}
+
+export async function fetchDerivativeTransactions(market = 'IN') {
+  const res = await fetch(`/api/derivatives/${encodeURIComponent(market)}/transactions`);
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch derivative transactions for ${market}`);
+  }
+  return await res.json();
+}
+
+export async function placeDerivativeOrder({
+  market,
+  contract_id = null,
+  underlying = null,
+  instrument_type = null,
+  option_type = null,
+  strike_price = null,
+  expiry_date = null,
+  lot_size = null,
+  symbol = null,
+  side,
+  action,
+  quantity,
+  order_type = 'market',
+  price = null,
+  underlying_price = null,
+}) {
+  const payload = {
+    market,
+    side,
+    action,
+    quantity: Number(quantity),
+    order_type,
+  };
+  if (contract_id) payload.contract_id = Number(contract_id);
+  if (underlying) payload.underlying = String(underlying);
+  if (instrument_type) payload.instrument_type = String(instrument_type);
+  if (option_type) payload.option_type = String(option_type);
+  if (strike_price !== null && strike_price !== undefined) payload.strike_price = Number(strike_price);
+  if (expiry_date) payload.expiry_date = String(expiry_date);
+  if (lot_size) payload.lot_size = Number(lot_size);
+  if (symbol) payload.symbol = String(symbol);
+  if (price !== null && price !== undefined && price !== '') payload.price = Number(price);
+  if (underlying_price !== null && underlying_price !== undefined && underlying_price !== '') {
+    payload.underlying_price = Number(underlying_price);
+  }
+
+  const res = await fetch('/api/derivatives/order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    let msg = 'Derivative order placement failed';
+    if (errorData.detail) {
+      if (typeof errorData.detail === 'string') {
+        msg = errorData.detail;
+      } else if (Array.isArray(errorData.detail)) {
+        msg = errorData.detail.map((e) => e.msg || JSON.stringify(e)).join('; ');
+      }
+    }
+    throw new Error(msg);
+  }
+  return await res.json();
+}
+
 
 
 

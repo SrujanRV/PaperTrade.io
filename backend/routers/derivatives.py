@@ -46,6 +46,11 @@ from services.derivatives_engine import (
     get_or_create_contract,
     place_derivative_order,
 )
+from services.derivatives_feed import (
+    fetch_us_continuous_futures,
+    fetch_us_option_chain,
+    nse_client,
+)
 from services.price_feed import get_quote, get_quotes
 
 logger = logging.getLogger(__name__)
@@ -116,7 +121,7 @@ def create_derivative_order(
             quantity=body.quantity,
             order_type=body.order_type,
             requested_price=body.price,
-            fill_price=body.price if body.order_type == "limit" else None,
+            fill_price=body.price,
             underlying_price=body.underlying_price,
         )
     except ValueError as exc:
@@ -366,3 +371,76 @@ def trigger_margin_call_evaluation(
 ) -> List[DerivativeOrderOut]:
     orders = evaluate_derivative_margin_calls(db=db)
     return [DerivativeOrderOut.model_validate(o) for o in orders]
+
+
+# ── GET /api/derivatives/chain ────────────────────────────────────────────────
+
+@router.get(
+    "/chain",
+    summary="Get option chain data",
+    description="Fetches call/put option chain with live Greeks, OI, and bid/ask quotes for an index or stock.",
+)
+def get_option_chain_data(
+    market: Literal["IN", "US"] = Query("IN"),
+    symbol: Optional[str] = Query(None, description="Symbol e.g. NIFTY, BANKNIFTY, AAPL, TSLA"),
+    expiry: Optional[str] = Query(None, description="Expiry date string (e.g. 29-Sep-2026 or 2026-09-28)"),
+) -> Dict[str, Any]:
+    m = market.upper()
+    if m == "IN":
+        sym = (symbol or "NIFTY").upper()
+        return nse_client.get_option_chain(symbol=sym, expiry=expiry)
+    else:
+        sym = (symbol or "AAPL").upper()
+        return fetch_us_option_chain(ticker_symbol=sym, expiry=expiry)
+
+
+@router.get(
+    "/{market}/chain",
+    include_in_schema=False,
+)
+def get_option_chain_by_market(
+    market: Literal["IN", "US"],
+    symbol: Optional[str] = Query(None),
+    expiry: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    return get_option_chain_data(market=market, symbol=symbol, expiry=expiry)
+
+
+# ── GET /api/derivatives/futures ──────────────────────────────────────────────
+
+@router.get(
+    "/futures",
+    summary="Get futures market data",
+    description="Returns live index futures by expiry for India or continuous futures for US.",
+)
+def get_futures_market_data(
+    market: Literal["IN", "US"] = Query("IN"),
+    symbol: Optional[str] = Query(None),
+) -> Any:
+    m = market.upper()
+    if m == "IN":
+        if symbol:
+            return nse_client.get_index_futures(symbol=symbol.upper())
+        return {
+            "market": "IN",
+            "indices": [
+                nse_client.get_index_futures("NIFTY"),
+                nse_client.get_index_futures("BANKNIFTY"),
+            ]
+        }
+    else:
+        return {
+            "market": "US",
+            "contracts": fetch_us_continuous_futures()
+        }
+
+
+@router.get(
+    "/{market}/futures",
+    include_in_schema=False,
+)
+def get_futures_by_market(
+    market: Literal["IN", "US"],
+    symbol: Optional[str] = Query(None),
+) -> Any:
+    return get_futures_market_data(market=market, symbol=symbol)

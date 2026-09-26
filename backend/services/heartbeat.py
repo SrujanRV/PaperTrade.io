@@ -113,6 +113,9 @@ class HeartbeatManager:
                 now = time.time()
 
                 with self._lock:
+                    if os.environ.get("DISABLE_AUTO_SHUTDOWN") == "1":
+                        continue
+
                     # If we haven't received any heartbeats yet, honor startup_grace_seconds
                     if not self.has_received_heartbeat:
                         if (now - self.start_time) < self.startup_grace_seconds:

@@ -8,7 +8,7 @@ the database shape (we can rename/add DB columns without breaking clients).
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -333,6 +333,22 @@ class DerivativeOrderRequest(BaseModel):
     order_type: Literal["market", "limit"] = "market"
     price: float | None = Field(None, gt=0, description="Limit price (or fill price override for testing)")
     underlying_price: float | None = Field(None, gt=0, description="Current underlying spot price override")
+
+    @field_validator("expiry_date", mode="before")
+    @classmethod
+    def parse_expiry_date(cls, v: Any) -> date | None:
+        if v is None or isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return None
+            for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y", "%d%b%y", "%d%b%Y", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(s, fmt).date()
+                except ValueError:
+                    continue
+        return v
 
 
 class DerivativePositionWithPnLOut(BaseModel):

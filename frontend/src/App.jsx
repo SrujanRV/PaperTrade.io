@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Watchlist } from './components/Watchlist';
+import { OptionChain } from './components/OptionChain';
+import { FuturesMarket } from './components/FuturesMarket';
 import { Portfolio } from './components/Portfolio';
 import { OrderHistory } from './components/OrderHistory';
 import { TradeLog } from './components/TradeLog';
@@ -67,7 +69,7 @@ function loadInitialWatchlists() {
 function loadInitialDefaultTab() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_DEFAULT_TAB);
-    if (saved && ['watchlist', 'portfolio', 'history', 'trades'].includes(saved)) {
+    if (saved && ['watchlist', 'options', 'futures', 'portfolio', 'history', 'trades'].includes(saved)) {
       return saved;
     }
   } catch (e) {}
@@ -91,14 +93,17 @@ export default function App() {
   const [watchlists, setWatchlists] = useState(loadInitialWatchlists);
   const [watchlistMarket, setWatchlistMarket] = useState('IN');
 
-  // Navigation tab state: 'watchlist' | 'portfolio' | 'history' | 'trades'
+  // Navigation tab state: 'watchlist' | 'options' | 'futures' | 'portfolio' | 'history' | 'trades'
   const [activeTab, setActiveTab] = useState(loadInitialDefaultTab);
 
   // Portfolio selected market: 'IN' | 'US'
   const [portfolioMarket, setPortfolioMarket] = useState('IN');
 
-  // Active ticker open in OrderTicket side panel
+  // Active equity ticker open in OrderTicket side panel
   const [selectedTicker, setSelectedTicker] = useState(null);
+
+  // Active derivative contract open in OrderTicket side panel
+  const [selectedContract, setSelectedContract] = useState(null);
 
   // Active ticker open in full CandlestickChartModal
   const [fullChartTicker, setFullChartTicker] = useState(null);
@@ -113,6 +118,16 @@ export default function App() {
     } catch (e) {
       console.error('Failed to save default tab to localStorage:', e);
     }
+  }, []);
+
+  const handleSelectContract = useCallback((contractData) => {
+    setSelectedContract(contractData);
+    setSelectedTicker(null);
+  }, []);
+
+  const handleSelectTicker = useCallback((sym) => {
+    setSelectedTicker(sym);
+    setSelectedContract(null);
   }, []);
 
   const handleAddTicker = useCallback((ticker, targetMarket) => {
@@ -189,7 +204,6 @@ export default function App() {
       setInWallet(inData);
       setUsWallet(usData);
 
-      // On initial load, if neither wallet exists and user hasn't dismissed setup in this session, show setup modal
       const dismissed = sessionStorage.getItem('papertrade_setup_dismissed');
       if (!inData && !usData && !dismissed) {
         setShowWalletModal(true);
@@ -265,11 +279,15 @@ export default function App() {
     } catch (e) {}
   }, []);
 
-  // Determine which wallet corresponds to the selected ticker in OrderTicket
-  const isSelectedIndian =
-    selectedTicker?.toUpperCase().endsWith('.NS') ||
-    selectedTicker?.toUpperCase().endsWith('.BO');
-  const activeWallet = isSelectedIndian ? inWallet : usWallet;
+  // Determine active wallet for OrderTicket
+  let activeWallet = null;
+  if (selectedContract) {
+    activeWallet = selectedContract.market === 'IN' ? inWallet : usWallet;
+  } else if (selectedTicker) {
+    const isIndian = selectedTicker.toUpperCase().endsWith('.NS') || selectedTicker.toUpperCase().endsWith('.BO');
+    activeWallet = isIndian ? inWallet : usWallet;
+  }
+
   const activeQuote = selectedTicker ? prices[selectedTicker.toUpperCase()] : null;
 
   function handleOrderExecuted() {
@@ -301,10 +319,10 @@ export default function App() {
         {/* Terminal Sub-Navigation Bar */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border pb-3">
           {/* Navigation Tabs */}
-          <div className="inline-flex p-0.5 bg-surface border border-border font-mono-tabular">
+          <div className="inline-flex p-0.5 bg-surface border border-border font-mono-tabular flex-wrap">
             <button
               onClick={() => setActiveTab('watchlist')}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
                 activeTab === 'watchlist'
                   ? 'bg-[#232731] text-text-primary'
                   : 'text-text-muted hover:text-text-primary'
@@ -313,8 +331,28 @@ export default function App() {
               Watchlist
             </button>
             <button
+              onClick={() => setActiveTab('options')}
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === 'options'
+                  ? 'bg-[#232731] text-text-primary'
+                  : 'text-text-muted hover:text-text-primary'
+              }`}
+            >
+              Option Chain
+            </button>
+            <button
+              onClick={() => setActiveTab('futures')}
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === 'futures'
+                  ? 'bg-[#232731] text-text-primary'
+                  : 'text-text-muted hover:text-text-primary'
+              }`}
+            >
+              Futures Market
+            </button>
+            <button
               onClick={() => setActiveTab('portfolio')}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
                 activeTab === 'portfolio'
                   ? 'bg-[#232731] text-text-primary'
                   : 'text-text-muted hover:text-text-primary'
@@ -327,7 +365,7 @@ export default function App() {
                 setActiveTab('history');
                 setNewFills([]);
               }}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors flex items-center space-x-1.5 ${
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors flex items-center space-x-1.5 ${
                 activeTab === 'history'
                   ? 'bg-[#232731] text-text-primary'
                   : 'text-text-muted hover:text-text-primary'
@@ -346,7 +384,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab('trades')}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
                 activeTab === 'trades'
                   ? 'bg-[#232731] text-text-primary'
                   : 'text-text-muted hover:text-text-primary'
@@ -361,10 +399,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* View Content: Watchlist, Portfolio, Order History, or Trade Log + Dockable Order Ticket */}
+        {/* View Content: Watchlist, Options, Futures, Portfolio, History, or Trades + Order Ticket */}
         <div className="flex flex-col lg:flex-row gap-6 items-start">
           {/* Main Table Area */}
-          <div className="flex-1 w-full">
+          <div className="flex-1 w-full min-w-0">
             {activeTab === 'watchlist' && (
               <Watchlist
                 selectedMarket={watchlistMarket}
@@ -373,10 +411,26 @@ export default function App() {
                 prices={prices}
                 connectionStatus={connectionStatus}
                 selectedTicker={selectedTicker}
-                onSelectTicker={(ticker) => setSelectedTicker(ticker)}
+                onSelectTicker={handleSelectTicker}
                 onAddTicker={handleAddTicker}
                 onRemoveTicker={handleRemoveTicker}
                 onOpenChart={(ticker) => setFullChartTicker(ticker)}
+              />
+            )}
+
+            {activeTab === 'options' && (
+              <OptionChain
+                market={watchlistMarket}
+                onSelectContract={handleSelectContract}
+                wallet={watchlistMarket === 'IN' ? inWallet : usWallet}
+              />
+            )}
+
+            {activeTab === 'futures' && (
+              <FuturesMarket
+                defaultMarket={watchlistMarket}
+                onSelectContract={handleSelectContract}
+                wallet={watchlistMarket === 'IN' ? inWallet : usWallet}
               />
             )}
 
@@ -384,7 +438,8 @@ export default function App() {
               <Portfolio
                 selectedMarket={portfolioMarket}
                 onSelectMarket={(m) => setPortfolioMarket(m)}
-                onSelectTicker={(ticker) => setSelectedTicker(ticker)}
+                onSelectTicker={handleSelectTicker}
+                onSelectContract={handleSelectContract}
                 onOpenChart={(ticker) => setFullChartTicker(ticker)}
                 onGoToWatchlist={() => setActiveTab('watchlist')}
                 onOpenWalletSetup={handleOpenWalletSetup}
@@ -419,13 +474,17 @@ export default function App() {
           </div>
 
           {/* Dockable Order Ticket Side Panel */}
-          {selectedTicker && (
+          {(selectedTicker || selectedContract) && (
             <div className="w-full lg:w-auto shrink-0">
               <OrderTicket
                 ticker={selectedTicker}
+                contract={selectedContract}
                 quote={activeQuote}
                 wallet={activeWallet}
-                onClose={() => setSelectedTicker(null)}
+                onClose={() => {
+                  setSelectedTicker(null);
+                  setSelectedContract(null);
+                }}
                 onOrderExecuted={handleOrderExecuted}
                 onOpenWalletSetup={handleOpenWalletSetup}
                 onOpenChart={(ticker) => setFullChartTicker(ticker)}
@@ -443,6 +502,7 @@ export default function App() {
         onClose={() => setFullChartTicker(null)}
         onTrade={(tickerToTrade) => {
           setSelectedTicker(tickerToTrade);
+          setSelectedContract(null);
           setFullChartTicker(null);
         }}
       />
@@ -461,7 +521,7 @@ export default function App() {
         initialUS={usWallet?.starting_balance || 10000}
       />
 
-      {/* Restructured Settings Modal */}
+      {/* Settings Modal */}
       <SettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
