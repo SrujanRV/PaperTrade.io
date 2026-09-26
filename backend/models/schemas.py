@@ -331,7 +331,9 @@ class DerivativeOrderRequest(BaseModel):
     action: Literal["buy_to_open", "sell_to_open", "buy_to_close", "sell_to_close"]
     quantity: float = Field(..., gt=0, description="Order quantity in lots (e.g. 1, 2)")
     order_type: Literal["market", "limit"] = "market"
-    price: float | None = Field(None, gt=0, description="Limit price (or fill price override for testing)")
+    price: float | None = Field(None, ge=0, description="Limit price or fill price (0 or None treated as market order)")
+    bid: float | None = Field(None, ge=0, description="Current bid price quote")
+    ask: float | None = Field(None, ge=0, description="Current ask price quote")
     underlying_price: float | None = Field(None, gt=0, description="Current underlying spot price override")
 
     @field_validator("expiry_date", mode="before")

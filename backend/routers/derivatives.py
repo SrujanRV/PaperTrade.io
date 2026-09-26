@@ -122,6 +122,8 @@ def create_derivative_order(
             order_type=body.order_type,
             requested_price=body.price,
             fill_price=body.price,
+            bid=body.bid,
+            ask=body.ask,
             underlying_price=body.underlying_price,
         )
     except ValueError as exc:

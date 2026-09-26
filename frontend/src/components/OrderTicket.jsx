@@ -97,7 +97,21 @@ export function OrderTicket({
     const und = effectiveContract.underlying || '';
     const contractSym = effectiveContract.symbol || `${und} CONTRACT`;
 
-    const liveP = effectiveContract.current_price || effectiveContract.price || 0;
+    const liveP = (() => {
+      if (instType === 'option') {
+        const isBuying = (derivAction === 'buy_to_open' || derivAction === 'buy_to_close');
+        if (isBuying) {
+          if (effectiveContract.ask && effectiveContract.ask > 0) return effectiveContract.ask;
+          if (effectiveContract.price && effectiveContract.price > 0) return effectiveContract.price;
+          if (effectiveContract.bid && effectiveContract.bid > 0) return effectiveContract.bid;
+        } else {
+          if (effectiveContract.bid && effectiveContract.bid > 0) return effectiveContract.bid;
+          if (effectiveContract.price && effectiveContract.price > 0) return effectiveContract.price;
+          if (effectiveContract.ask && effectiveContract.ask > 0) return effectiveContract.ask;
+        }
+      }
+      return effectiveContract.current_price || effectiveContract.price || 0;
+    })();
     const effP = orderType === 'limit' && Number(limitPrice) > 0 ? Number(limitPrice) : liveP;
     const numLots = Math.max(1, Number(quantity) || 1);
     const totalUnits = numLots * lotSize;
@@ -207,6 +221,8 @@ export function OrderTicket({
           quantity: numLots,
           order_type: orderType,
           price: Number(effP) > 0 ? Number(effP) : (orderType === 'limit' ? Number(limitPrice) : null),
+          bid: effectiveContract.bid || null,
+          ask: effectiveContract.ask || null,
           underlying_price: effectiveContract.underlying_price,
         };
 
@@ -271,6 +287,12 @@ export function OrderTicket({
               {currSym}{formatMoney(liveP, curr)}
             </span>
           </div>
+          {(effectiveContract.bid != null || effectiveContract.ask != null) && (
+            <div className="flex items-center justify-between mt-1 text-[11px] font-mono-tabular text-text-muted">
+              <span>Bid: <span className="text-emerald-400 font-semibold">{currSym}{formatMoney(effectiveContract.bid || 0, curr)}</span></span>
+              <span>Ask: <span className="text-rose-400 font-semibold">{currSym}{formatMoney(effectiveContract.ask || 0, curr)}</span></span>
+            </div>
+          )}
         </div>
 
         {/* Uninitialized Wallet Warning */}

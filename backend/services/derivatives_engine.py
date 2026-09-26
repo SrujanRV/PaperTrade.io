@@ -257,6 +257,8 @@ def place_derivative_order(
     order_type: Literal["market", "limit"] = "market",
     requested_price: float | None = None,
     fill_price: float | None = None,
+    bid: float | None = None,
+    ask: float | None = None,
     underlying_price: float | None = None,
     settlement_date: date | None = None,
     triggered_by: str | None = None,
@@ -274,23 +276,41 @@ def place_derivative_order(
         raise ValueError(f"Invalid action '{action}' for sell side order")
 
     # Resolve fill price
-    if fill_price is None or fill_price <= 0:
-        if order_type == "limit" and requested_price and requested_price > 0:
-            fill_price = requested_price
-        else:
-            # Look up live price quote for the contract symbol or underlying
+    if order_type == "limit" and requested_price and requested_price > 0:
+        fill_price = requested_price
+    elif fill_price is None or fill_price <= 0:
+        # Realistic broker execution model for market orders / zero-LTP strikes:
+        # - Buy orders (long or closing short) lift the Ask price
+        # - Sell orders (writing or closing long) hit the Bid price
+        # - Fallback to opposite side quote or midpoint if preferred side is missing
+        if side == "buy":
+            if ask is not None and ask > 0:
+                fill_price = ask
+            elif bid is not None and bid > 0:
+                fill_price = bid
+        elif side == "sell":
+            if bid is not None and bid > 0:
+                fill_price = bid
+            elif ask is not None and ask > 0:
+                fill_price = ask
+
+        # Midpoint fallback if both bid/ask exist
+        if (fill_price is None or fill_price <= 0) and bid is not None and ask is not None and bid > 0 and ask > 0:
+            fill_price = round((bid + ask) / 2.0, 2)
+
+        # Look up live price quote for the contract symbol or underlying
+        if fill_price is None or fill_price <= 0:
             quote = get_quote(contract.symbol)
             if quote and quote.price > 0:
                 fill_price = quote.price
+            elif requested_price and requested_price > 0:
+                fill_price = requested_price
             else:
-                # If option without direct quote, fallback to requested_price
-                if requested_price and requested_price > 0:
-                    fill_price = requested_price
-                else:
-                    return _persist_rejected_order(
-                        db, wallet.id, contract.id, side, action, quantity,
-                        "unresolvable_price", order_type, requested_price
-                    )
+                # Under no circumstances does an order execute at 0 or unresolvable price
+                return _persist_rejected_order(
+                    db, wallet.id, contract.id, side, action, quantity,
+                    "unresolvable_price", order_type, requested_price
+                )
 
     # Resolve underlying spot price (strictly used for naked option notional calculation)
     if underlying_price is None or underlying_price <= 0:
