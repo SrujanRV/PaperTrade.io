@@ -380,11 +380,16 @@ def search_symbols(query: str, market: str = "US") -> list[dict]:
         if market_upper == "IN":
             if sym.endswith(".NS") or sym.endswith(".BO") or exch_code in ("NSI", "BSE"):
                 exch = "BSE" if sym.endswith(".BO") or exch_code == "BSE" else "NSE"
+                clean_sym = sym.replace(".NS", "").replace(".BO", "")
+                from services.derivatives_feed import NSE_LOT_SIZES
+                lot = NSE_LOT_SIZES.get(clean_sym)
                 results.append({
                     "symbol": sym,
                     "name": name,
                     "exchange": exch,
                     "currency": "INR",
+                    "is_fo_eligible": lot is not None,
+                    "lot_size": lot,
                 })
         elif market_upper == "US":
             # US listed and not foreign suffix
@@ -395,6 +400,8 @@ def search_symbols(query: str, market: str = "US") -> list[dict]:
                     "name": name,
                     "exchange": exch,
                     "currency": "USD",
+                    "is_fo_eligible": True,
+                    "lot_size": 100,
                 })
 
         if len(results) >= 8:

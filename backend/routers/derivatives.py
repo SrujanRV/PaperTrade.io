@@ -411,7 +411,7 @@ def get_option_chain_by_market(
 @router.get(
     "/futures",
     summary="Get futures market data",
-    description="Returns live index futures by expiry for India or continuous futures for US.",
+    description="Returns live index or stock futures by expiry for India or continuous futures for US.",
 )
 def get_futures_market_data(
     market: Literal["IN", "US"] = Query("IN"),
@@ -420,7 +420,7 @@ def get_futures_market_data(
     m = market.upper()
     if m == "IN":
         if symbol:
-            return nse_client.get_index_futures(symbol=symbol.upper())
+            return nse_client.get_futures(symbol=symbol.upper())
         return {
             "market": "IN",
             "indices": [
@@ -444,3 +444,13 @@ def get_futures_by_market(
     symbol: Optional[str] = Query(None),
 ) -> Any:
     return get_futures_market_data(market=market, symbol=symbol)
+
+
+@router.get(
+    "/in/fo-stocks",
+    summary="Get list of NSE F&O eligible stocks",
+    description="Returns curated exchange-approved Indian stocks eligible for F&O contracts with their lot sizes.",
+)
+def get_fo_stocks_list() -> List[Dict[str, Any]]:
+    from services.derivatives_feed import get_nse_fo_eligible_stocks
+    return get_nse_fo_eligible_stocks()

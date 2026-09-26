@@ -54,13 +54,10 @@ def _today_date() -> date:
     return datetime.now(timezone.utc).date()
 
 
-# Default lot sizes (SEBI late 2025/2026 revisions)
-DEFAULT_LOT_SIZES = {
-    "NIFTY": 65,      # SEBI contract sizing mandate (65 x ~23,150 ≈ ₹15L)
-    "BANKNIFTY": 30,  # SEBI mandate (30 x ~55,600 ≈ ₹16.7L)
-    "FINNIFTY": 60,
-    "MIDCPNIFTY": 120,
-}
+from services.derivatives_feed import NSE_LOT_SIZES
+
+# Comprehensive Default lot sizes across indices and F&O equities
+DEFAULT_LOT_SIZES = NSE_LOT_SIZES
 
 UNDERLYING_SYMBOL_MAP = {
     "NIFTY": "^NSEI",

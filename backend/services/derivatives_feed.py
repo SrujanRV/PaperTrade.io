@@ -25,13 +25,188 @@ from services.price_feed import get_quote
 
 logger = logging.getLogger(__name__)
 
-# Default contract sizes & multipliers
-NSE_LOT_SIZES = {
+# Comprehensive NSE F&O Lot Sizes lookup table.
+# Hardcoded with a comment that it needs periodic manual updates as per NSE circulars and SEBI revisions.
+NSE_LOT_SIZES: Dict[str, int] = {
+    # ── Indices ───────────────────────────────────────────────────────────────
     "NIFTY": 65,
     "BANKNIFTY": 30,
     "FINNIFTY": 60,
     "MIDCPNIFTY": 120,
+
+    # ── Top Liquid Equities in NSE F&O ─────────────────────────────────────────
+    "RELIANCE": 250,
+    "TCS": 175,
+    "INFY": 400,
+    "HDFCBANK": 550,
+    "ICICIBANK": 700,
+    "SBIN": 750,
+    "BHARTIARTL": 950,
+    "ITC": 1600,
+    "LT": 150,
+    "TATAMOTORS": 550,
+    "TATASTEEL": 5500,
+    "MARUTI": 50,
+    "BAJFINANCE": 125,
+    "AXISBANK": 625,
+    "KOTAKBANK": 400,
+    "HINDUNILVR": 300,
+    "SUNPHARMA": 350,
+    "TITAN": 175,
+    "WIPRO": 1500,
+    "ADANIENT": 300,
+    "ADANIPORTS": 400,
+    "COALINDIA": 2100,
+    "POWERGRID": 1800,
+    "NTPC": 1500,
+    "ONGC": 3850,
+    "JSWSTEEL": 675,
+    "HCLTECH": 350,
+    "TECHM": 600,
+    "BAJAJFINSV": 500,
+    "DRREDDY": 125,
+    "CIPLA": 650,
+    "DIVISLAB": 100,
+    "APOLLOHOSP": 125,
+    "EICHERMOT": 150,
+    "HEROMOTOCO": 150,
+    "M&M": 350,
+    "TATACONSUM": 900,
+    "BRITANNIA": 200,
+    "NESTLEIND": 40,
+    "ASIANPAINT": 200,
+    "ULTRACEMCO": 100,
+    "GRASIM": 260,
+    "SHREECEM": 25,
+    "BHARATFORG": 500,
+    "INDUSINDBK": 500,
+    "VEDL": 1150,
+    "TRENT": 100,
+    "BEL": 2850,
+    "HAL": 150,
+    "DLF": 825,
+    "ZOMATO": 2000,
+    "JIOFIN": 2000,
+    "INDIGO": 300,
+    "BOSCHLTD": 25,
+    "PIDILITIND": 250,
+    "SIEMENS": 125,
+    "ABB": 125,
+    "CANBK": 6750,
+    "PNB": 8000,
+    "BANKBARODA": 2925,
+    "CHOLAFIN": 625,
+    "MUTHOOTFIN": 550,
+    "SHRIRAMFIN": 150,
+    "LTIM": 150,
+    "PERSISTENT": 100,
+    "COFORGE": 150,
+    "MPHASIS": 275,
+    "DIXON": 100,
+    "POLYCAB": 100,
+    "HAVELLS": 500,
+    "VOLTAS": 600,
+    "TVSMOTOR": 350,
+    "BAJAJ-AUTO": 75,
+    "ASHOKLEY": 5000,
+    "MOTHERSON": 6150,
+    "AMBUJACEM": 900,
+    "ACC": 300,
+    "DALBHARAT": 275,
+    "HINDALCO": 1400,
+    "NMDC": 4500,
+    "NATIONALUM": 3750,
+    "SAIL": 8000,
+    "JINDALSTEL": 625,
+    "BPCL": 1800,
+    "IOC": 4875,
+    "GAIL": 4650,
+    "PETRONET": 3000,
+    "IGL": 1375,
+    "MGL": 400,
+    "AUBANK": 1000,
+    "FEDERALBNK": 5000,
+    "IDFCFIRSTB": 7500,
+    "BANDHANBNK": 2500,
+    "PEL": 750,
+    "PFC": 1300,
+    "RECLTD": 2000,
+    "LICHSGFIN": 1000,
+    "MANAPPURAM": 3000,
+    "AUROPHARMA": 550,
+    "LUPIN": 425,
+    "BIOCON": 2500,
+    "ALKEM": 125,
+    "TORNTPHARM": 250,
+    "COLPAL": 200,
+    "DABUR": 1250,
+    "GODREJCP": 500,
+    "MARICO": 1200,
+    "BERGEPAINT": 1100,
+    "PAGEIND": 15,
+    "BATAINDIA": 375,
+    "ABFRL": 2600,
+    "JUBLFOOD": 1250,
+    "MCDOWELL-N": 700,
+    "UBL": 400,
+    "IRCTC": 875,
+    "CONCOR": 1000,
+    "GMRINFRA": 10000,
+    "BHEL": 2625,
+    "CUMMINSIND": 300,
+    "ASTRAL": 400,
+    "SUPREMEIND": 125,
+    "DEEPAKNTR": 300,
+    "TATACHEM": 550,
+    "NAVINFLUOR": 175,
+    "SRF": 375,
+    "PIIND": 250,
+    "UPL": 1300,
+    "EXIDEIND": 1200,
+    "AMARAJABAT": 1000,
+    "CROMPTON": 1800,
+    "LALPATHLAB": 300,
+    "METROPOLIS": 400,
+    "SYNGENE": 1000,
+    "IPCALAB": 650,
+    "GLENMARK": 575,
+    "GRANULES": 2000,
+    "LAURUSLABS": 1700,
+    "ABCAPITAL": 3100,
+    "L&TFH": 4462,
+    "POONAWALLA": 1250,
+    "IBULHSGFIN": 4100,
+    "DELHIVERY": 1800,
+    "PAYTM": 1000,
+    "NYKAA": 3000,
+    "IDEA": 80000,
+    "INDUSTOWER": 3400,
+    "SUNTV": 1500,
+    "ZEEL": 3000,
+    "PVRINOX": 400,
 }
+
+
+def is_nse_fo_eligible(symbol: str) -> bool:
+    """Checks whether an Indian symbol is exchange-approved for F&O."""
+    clean = symbol.upper().replace(".NS", "").replace(".BO", "")
+    return clean in NSE_LOT_SIZES
+
+
+def get_nse_fo_eligible_stocks() -> List[Dict[str, Any]]:
+    """Returns curated list of NSE F&O eligible stocks with lot sizes."""
+    indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+    return [
+        {
+            "symbol": sym,
+            "display_symbol": f"{sym}.NS",
+            "name": sym,
+            "lot_size": lot,
+            "is_index": sym in indices,
+        }
+        for sym, lot in NSE_LOT_SIZES.items()
+    ]
+
 
 US_FUTURES_SPECS = {
     "ES=F": {"name": "E-Mini S&P 500 Continuous", "multiplier": 50, "currency": "USD"},
@@ -114,13 +289,13 @@ class NSEDerivativesClient:
 
     def get_option_chain(self, symbol: str = "NIFTY", expiry: Optional[str] = None) -> Dict[str, Any]:
         """
-        Fetches option chain for NIFTY or BANKNIFTY.
+        Fetches option chain for Indian indices (NIFTY, BANKNIFTY) or F&O eligible equities (RELIANCE, TCS, etc.).
         """
-        sym = symbol.upper()
+        sym = symbol.upper().replace(".NS", "").replace(".BO", "")
         contract_info = self.get_option_chain_contract_info(sym)
         expiries = contract_info.get("expiryDates", [])
         if not expiries:
-            expiries = ["29-Sep-2026"]
+            expiries = ["29-Sep-2026", "27-Oct-2026", "26-Nov-2026"]
 
         target_expiry = expiry if expiry and expiry in expiries else expiries[0]
         cache_key = f"oc_{sym}_{target_expiry}"
@@ -131,7 +306,11 @@ class NSEDerivativesClient:
             return {**cached["data"], "is_stale": False, "cached_at": cached["iso_time"]}
 
         self._init_session()
-        url = f"https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol={sym}&expiry={target_expiry}"
+        is_index = sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+        type_param = "Indices" if is_index else "Equities"
+        url = f"https://www.nseindia.com/api/option-chain-v3?type={type_param}&symbol={sym}&expiry={target_expiry}"
+        lot_size = NSE_LOT_SIZES.get(sym, 250 if not is_index else 65)
+
         try:
             r = self.session.get(url, headers=self.api_headers, timeout=8)
             if r.status_code in (401, 403):
@@ -182,7 +361,7 @@ class NSEDerivativesClient:
                     "available_expiries": expiries,
                     "underlying_value": underlying_val,
                     "nse_timestamp": timestamp_str or datetime.now(timezone.utc).strftime("%d-%b-%Y %H:%M:%S"),
-                    "lot_size": NSE_LOT_SIZES.get(sym, 65),
+                    "lot_size": lot_size,
                     "total_strikes": len(strikes_parsed),
                     "strikes": strikes_parsed,
                     "is_stale": False,
@@ -195,7 +374,7 @@ class NSEDerivativesClient:
                 }
                 return parsed_result
         except Exception as e:
-            logger.warning("Error requesting NSE option chain: %s", e)
+            logger.warning("Error requesting NSE option chain for %s: %s", sym, e)
 
         if cached:
             return {
@@ -206,9 +385,28 @@ class NSEDerivativesClient:
             }
 
         # Synthetic fallback generation if NSE is offline or blocked
-        spot_q = get_quote("^NSEI" if sym == "NIFTY" else "^NSEBANK")
-        spot = spot_q.price if spot_q and spot_q.price > 0 else (23140.0 if sym == "NIFTY" else 55500.0)
-        step = 50 if sym == "NIFTY" else 100
+        if is_index:
+            spot_q = get_quote("^NSEI" if sym == "NIFTY" else "^NSEBANK")
+            spot = spot_q.price if spot_q and spot_q.price > 0 else (23140.0 if sym == "NIFTY" else 55500.0)
+            step = 50 if sym == "NIFTY" else 100
+        else:
+            spot_q = get_quote(f"{sym}.NS")
+            if not spot_q or spot_q.error or spot_q.price <= 0:
+                spot_q = get_quote(sym)
+            spot = spot_q.price if spot_q and not spot_q.error and spot_q.price > 0 else 1200.0
+            if spot > 5000:
+                step = 100
+            elif spot > 2000:
+                step = 50
+            elif spot > 1000:
+                step = 20
+            elif spot > 500:
+                step = 10
+            elif spot > 100:
+                step = 5
+            else:
+                step = 2.5
+
         atm = round(spot / step) * step
 
         synthetic_strikes = []
@@ -216,27 +414,28 @@ class NSEDerivativesClient:
             strk = atm + (offset * step)
             dist = strk - spot
             # Synthetic Intrinsic + extrinsic approximation
-            c_val = max(1.0, round(max(0, -dist) + max(5.0, 150.0 - abs(dist)*0.15), 1))
-            p_val = max(1.0, round(max(0, dist) + max(5.0, 150.0 - abs(dist)*0.15), 1))
+            base_extrinsic = max(2.0, spot * 0.015)
+            c_val = max(0.5, round(max(0, -dist) + max(1.0, base_extrinsic - abs(dist)*0.1), 2))
+            p_val = max(0.5, round(max(0, dist) + max(1.0, base_extrinsic - abs(dist)*0.1), 2))
             synthetic_strikes.append({
                 "strike": float(strk),
                 "ce": {
                     "ltp": c_val,
-                    "iv": 11.5,
-                    "oi": int(max(1000, 150000 - abs(dist) * 80)),
-                    "change": round(offset * -0.5, 2),
-                    "pChange": round(offset * -0.2, 2),
-                    "bid": round(c_val * 0.99, 1),
-                    "ask": round(c_val * 1.01, 1),
+                    "iv": 16.5,
+                    "oi": int(max(500, 75000 - abs(dist) * 40)),
+                    "change": round(offset * -0.2, 2),
+                    "pChange": round(offset * -0.1, 2),
+                    "bid": round(c_val * 0.98, 2),
+                    "ask": round(c_val * 1.02, 2),
                 },
                 "pe": {
                     "ltp": p_val,
-                    "iv": 10.8,
-                    "oi": int(max(1000, 140000 - abs(dist) * 75)),
-                    "change": round(offset * 0.5, 2),
-                    "pChange": round(offset * 0.2, 2),
-                    "bid": round(p_val * 0.99, 1),
-                    "ask": round(p_val * 1.01, 1),
+                    "iv": 15.8,
+                    "oi": int(max(500, 68000 - abs(dist) * 35)),
+                    "change": round(offset * 0.2, 2),
+                    "pChange": round(offset * 0.1, 2),
+                    "bid": round(p_val * 0.98, 2),
+                    "ask": round(p_val * 1.02, 2),
                 },
             })
 
@@ -248,7 +447,7 @@ class NSEDerivativesClient:
             "available_expiries": expiries,
             "underlying_value": spot,
             "nse_timestamp": datetime.now(timezone.utc).strftime("%d-%b-%Y %H:%M:%S"),
-            "lot_size": NSE_LOT_SIZES.get(sym, 65),
+            "lot_size": lot_size,
             "total_strikes": len(synthetic_strikes),
             "strikes": synthetic_strikes,
             "is_stale": True,
@@ -395,6 +594,136 @@ class NSEDerivativesClient:
             "cached_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    def get_stock_futures(self, symbol: str = "RELIANCE") -> Dict[str, Any]:
+        """
+        Fetches live contract futures per expiry for individual Indian F&O stocks.
+        First attempts to fetch from NSE liveEquity-derivatives?index=stock_fut.
+        Falls back smoothly to synthetic cost-of-carry futures based on live spot price.
+        """
+        sym = symbol.upper().replace(".NS", "").replace(".BO", "")
+        lot = NSE_LOT_SIZES.get(sym, 250)
+        cache_key = f"fut_stock_{sym}"
+        cached = self._cache.get(cache_key)
+        now = time.time()
+
+        if cached and (now - cached["timestamp"]) < self.cache_ttl:
+            return {**cached["data"], "is_stale": False, "cached_at": cached["iso_time"]}
+
+        self._init_session()
+        parsed_contracts = []
+        underlying_val = None
+
+        try:
+            url = "https://www.nseindia.com/api/liveEquity-derivatives?index=stock_fut"
+            r = self.session.get(url, headers=self.api_headers, timeout=8)
+            if r.status_code in (401, 403):
+                self._init_session(force=True)
+                r = self.session.get(url, headers=self.api_headers, timeout=8)
+
+            if r.status_code == 200:
+                raw = r.json()
+                items = raw.get("data", [])
+                matching = [x for x in items if x.get("underlying") == sym or sym in x.get("contract", "")]
+                if matching:
+                    for c in matching:
+                        if underlying_val is None:
+                            underlying_val = c.get("underlyingValue")
+                        lp = c.get("lastPrice")
+                        und_v = c.get("underlyingValue") or underlying_val
+                        basis = round(lp - und_v, 2) if lp and und_v else None
+                        parsed_contracts.append({
+                            "contract": c.get("contract") or f"{sym}-{c.get('expiryDate')}-FUT",
+                            "underlying": sym,
+                            "expiry": c.get("expiryDate"),
+                            "ltp": lp,
+                            "open": c.get("openPrice"),
+                            "high": c.get("highPrice"),
+                            "low": c.get("lowPrice"),
+                            "oi": c.get("openInterest"),
+                            "volume_contracts": c.get("volume") or c.get("numberOfContractsTraded"),
+                            "underlying_value": und_v,
+                            "basis": basis,
+                            "lot_size": lot,
+                            "initial_margin_pct": 12.0,
+                        })
+
+                    if parsed_contracts:
+                        result = {
+                            "symbol": sym,
+                            "market": "IN",
+                            "currency": "INR",
+                            "underlying_value": underlying_val,
+                            "lot_size": lot,
+                            "contracts": parsed_contracts,
+                            "is_stale": False,
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        self._cache[cache_key] = {
+                            "data": result,
+                            "timestamp": now,
+                            "iso_time": datetime.now(timezone.utc).isoformat(),
+                        }
+                        return result
+        except Exception as e:
+            logger.warning("Error fetching live NSE stock futures for %s: %s", sym, e)
+
+        if cached:
+            return {**cached["data"], "is_stale": True, "cached_at": cached["iso_time"], "warning": "Cached stock futures data"}
+
+        # Synthetic fallback based on live spot quote
+        spot_q = get_quote(f"{sym}.NS")
+        if not spot_q or spot_q.error or spot_q.price <= 0:
+            spot_q = get_quote(sym)
+        spot = spot_q.price if spot_q and not spot_q.error and spot_q.price > 0 else 1250.0
+
+        contract_info = self.get_option_chain_contract_info(sym)
+        expiries = contract_info.get("expiryDates", [])
+        if not expiries or len(expiries) < 3:
+            expiries = ["29-Sep-2026", "27-Oct-2026", "26-Nov-2026"]
+
+        monthly_expiries = expiries[:3]
+        premiums = [0.003, 0.007, 0.012]  # ~0.3%, ~0.7%, ~1.2% cost of carry
+
+        synth_contracts = []
+        for i, exp in enumerate(monthly_expiries):
+            prem_pct = premiums[i] if i < len(premiums) else (0.005 * (i + 1))
+            fut_p = round(spot * (1.0 + prem_pct), 2)
+            basis = round(fut_p - spot, 2)
+            synth_contracts.append({
+                "contract": f"{sym}-{exp.replace('-', '').upper()}-FUT",
+                "underlying": sym,
+                "expiry": exp,
+                "ltp": fut_p,
+                "open": round(fut_p - (spot * 0.001), 2),
+                "high": round(fut_p + (spot * 0.003), 2),
+                "low": round(fut_p - (spot * 0.003), 2),
+                "oi": int(max(5000, 120000 / (i + 1))),
+                "volume_contracts": int(max(2000, 65000 / (i + 1))),
+                "underlying_value": spot,
+                "basis": basis,
+                "lot_size": lot,
+                "initial_margin_pct": 12.0,
+            })
+
+        return {
+            "symbol": sym,
+            "market": "IN",
+            "currency": "INR",
+            "underlying_value": spot,
+            "lot_size": lot,
+            "contracts": synth_contracts,
+            "is_stale": True,
+            "warning": "Live NSE futures offline/closed; displaying simulation snapshot",
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def get_futures(self, symbol: str = "NIFTY") -> Dict[str, Any]:
+        """Unified router for Indian index futures and stock futures."""
+        sym = symbol.upper().replace(".NS", "").replace(".BO", "")
+        if sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+            return self.get_index_futures(sym)
+        return self.get_stock_futures(sym)
+
 
 # Singleton NSE client
 nse_client = NSEDerivativesClient(cache_ttl_seconds=30.0)
@@ -424,6 +753,13 @@ def fetch_us_option_chain(ticker_symbol: str = "AAPL", expiry: Optional[str] = N
 
         spot_quote = get_quote(sym)
         underlying_val = spot_quote.price if spot_quote and spot_quote.price > 0 else None
+        if underlying_val is None or underlying_val <= 0:
+            try:
+                underlying_val = float(t.fast_info.get('lastPrice') or t.fast_info.get('last_price') or 0.0)
+            except Exception:
+                pass
+        if (underlying_val is None or underlying_val <= 0) and all_strikes:
+            underlying_val = float(all_strikes[len(all_strikes) // 2])
 
         strikes_parsed = []
         for s in all_strikes:
