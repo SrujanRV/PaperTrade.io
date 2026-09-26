@@ -132,6 +132,11 @@ def create_derivative_order(
     summary="Get open derivative positions with live metrics",
     description="Returns all active options and futures positions enriched with live market prices, P&L, and margin health.",
 )
+@router.get(
+    "/positions/{market}",
+    response_model=List[DerivativePositionWithPnLOut],
+    include_in_schema=False,
+)
 def get_derivative_positions(
     market: Literal["IN", "US"],
     db: Session = Depends(get_db),
@@ -265,26 +270,53 @@ def get_derivative_transactions(
     return [DerivativeTransactionOut.model_validate(t) for t in txns]
 
 
-# ── GET /api/derivatives/{market}/contracts ───────────────────────────────────
+@router.get(
+    "/contracts",
+    response_model=List[DerivativeContractOut],
+    summary="Browse derivative contracts",
+    description="Browse available contracts filtered by underlying, instrument type, and market.",
+)
+def browse_contracts(
+    underlying: Optional[str] = Query(None, description="Underlying ticker (e.g. NIFTY, ES)"),
+    type: Optional[str] = Query(None, description="Alias for instrument_type (option or future)"),
+    instrument_type: Optional[Literal["option", "future"]] = Query(None),
+    market: Optional[Literal["IN", "US"]] = Query(None),
+    db: Session = Depends(get_db),
+) -> List[DerivativeContractOut]:
+    eff_type = (type or instrument_type)
+    query = db.query(DerivativeContract)
+    if market:
+        query = query.filter(DerivativeContract.market == market.upper())
+    if underlying:
+        query = query.filter(DerivativeContract.underlying == underlying.upper())
+    if eff_type:
+        query = query.filter(DerivativeContract.instrument_type == eff_type.lower())
+
+    contracts = query.order_by(DerivativeContract.expiry_date.asc().nulls_last()).all()
+    return [DerivativeContractOut.model_validate(c) for c in contracts]
+
 
 @router.get(
     "/{market}/contracts",
     response_model=List[DerivativeContractOut],
-    summary="List derivative contracts",
+    summary="List derivative contracts for a market",
     description="List available contracts filtered by underlying and instrument type.",
+    include_in_schema=False,
 )
 def get_derivative_contracts(
     market: Literal["IN", "US"],
     underlying: Optional[str] = Query(None, description="Underlying ticker (e.g. NIFTY, ES)"),
+    type: Optional[str] = Query(None, description="Alias for instrument_type (option or future)"),
     instrument_type: Optional[Literal["option", "future"]] = Query(None),
     db: Session = Depends(get_db),
 ) -> List[DerivativeContractOut]:
+    eff_type = (type or instrument_type)
     m = market.upper()
     query = db.query(DerivativeContract).filter(DerivativeContract.market == m)
     if underlying:
         query = query.filter(DerivativeContract.underlying == underlying.upper())
-    if instrument_type:
-        query = query.filter(DerivativeContract.instrument_type == instrument_type.lower())
+    if eff_type:
+        query = query.filter(DerivativeContract.instrument_type == eff_type.lower())
 
     contracts = query.order_by(DerivativeContract.expiry_date.asc().nulls_last()).all()
     return [DerivativeContractOut.model_validate(c) for c in contracts]
