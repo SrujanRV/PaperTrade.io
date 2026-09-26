@@ -117,6 +117,7 @@ def create_derivative_order(
             order_type=body.order_type,
             requested_price=body.price,
             fill_price=body.price if body.order_type == "limit" else None,
+            underlying_price=body.underlying_price,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

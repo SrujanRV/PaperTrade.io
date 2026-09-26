@@ -332,6 +332,7 @@ class DerivativeOrderRequest(BaseModel):
     quantity: float = Field(..., gt=0, description="Order quantity in lots (e.g. 1, 2)")
     order_type: Literal["market", "limit"] = "market"
     price: float | None = Field(None, gt=0, description="Limit price (or fill price override for testing)")
+    underlying_price: float | None = Field(None, gt=0, description="Current underlying spot price override")
 
 
 class DerivativePositionWithPnLOut(BaseModel):

@@ -62,6 +62,46 @@ DEFAULT_LOT_SIZES = {
     "MIDCPNIFTY": 120,
 }
 
+UNDERLYING_SYMBOL_MAP = {
+    "NIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
+    "ES": "ES=F",
+    "NQ": "NQ=F",
+    "CL": "CL=F",
+    "GC": "GC=F",
+}
+
+
+def resolve_underlying_spot_price(underlying: str, market: str = "IN") -> float | None:
+    """
+    Resolves the live spot/cash price of the underlying asset.
+    CRITICAL: NEVER returns strike price — returns actual spot price or None if unavailable.
+    """
+    und_upper = underlying.upper()
+    m_upper = market.upper()
+
+    # 1. Direct quote lookup
+    q = get_quote(und_upper)
+    if q and not q.error and q.price > 0:
+        return q.price
+
+    # 2. Check mapped symbol (e.g. NIFTY -> ^NSEI, ES -> ES=F)
+    mapped_sym = UNDERLYING_SYMBOL_MAP.get(und_upper)
+    if mapped_sym:
+        q_map = get_quote(mapped_sym)
+        if q_map and not q_map.error and q_map.price > 0:
+            return q_map.price
+
+    # 3. For Indian equities without suffix (e.g. RELIANCE, TCS)
+    if m_upper == "IN" and not (und_upper.endswith(".NS") or und_upper.endswith(".BO")):
+        q_ns = get_quote(f"{und_upper}.NS")
+        if q_ns and not q_ns.error and q_ns.price > 0:
+            return q_ns.price
+
+    return None
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Contract Management Helper
@@ -255,13 +295,11 @@ def place_derivative_order(
                         "unresolvable_price", order_type, requested_price
                     )
 
-    # Resolve underlying price (used for naked option notional calculation)
+    # Resolve underlying spot price (strictly used for naked option notional calculation)
     if underlying_price is None or underlying_price <= 0:
-        und_quote = get_quote(contract.underlying)
-        if und_quote and und_quote.price > 0:
-            underlying_price = und_quote.price
-        else:
-            underlying_price = contract.strike_price or fill_price
+        spot_p = resolve_underlying_spot_price(contract.underlying, contract.market)
+        if spot_p is not None and spot_p > 0:
+            underlying_price = spot_p
 
     total_units = quantity * contract.lot_size
     curr_date = settlement_date or _today_date()
@@ -417,7 +455,16 @@ def place_derivative_order(
             initial_margin = 0.0
             margin_to_lock = 0.0
         else:
-            # Naked option write: 20% initial margin on notional value
+            # Naked option write: 20% initial margin on UNDERLYING SPOT NOTIONAL value.
+            # CRITICAL RULE: Margin MUST be based on the current spot price of the underlying,
+            # NEVER on the option contract's strike price.
+            if underlying_price is None or underlying_price <= 0:
+                return _persist_rejected_order(
+                    db, wallet.id, contract.id, side, action, quantity,
+                    "unresolvable_underlying_spot_price", order_type, requested_price,
+                    triggered_by=triggered_by,
+                )
+
             notional = round(underlying_price * total_units, 2)
             initial_margin = round(0.20 * notional, 2)
             margin_to_lock = initial_margin
@@ -995,8 +1042,10 @@ def evaluate_derivative_margin_calls(
             mark_p = q.price if q and q.price > 0 else pos.entry_price
 
         if und_p is None:
+            und_p = resolve_underlying_spot_price(contract.underlying, contract.market)
+        if und_p is None or und_p <= 0:
             q_und = get_quote(contract.underlying)
-            und_p = q_und.price if q_und and q_und.price > 0 else (contract.strike_price or mark_p)
+            und_p = q_und.price if q_und and q_und.price > 0 else mark_p
 
         # ── Maintenance Requirement Calculation ────────────────────────────────
         if contract.instrument_type == "option":
@@ -1084,8 +1133,16 @@ def get_derivative_positions_summary(
 
         # Current market value
         if c.instrument_type == "option":
-            notional = (contract_und_p := (quotes.get(c.underlying).price if quotes.get(c.underlying) else c.strike_price or curr_p)) * units
-            market_val = curr_p * units
+            und_spot = None
+            if c.underlying in quotes:
+                val = quotes[c.underlying]
+                und_spot = val.price if isinstance(val, PriceQuote) else float(val)
+            if und_spot is None or und_spot <= 0:
+                und_spot = resolve_underlying_spot_price(c.underlying, c.market)
+            if und_spot is None or und_spot <= 0:
+                und_spot = curr_p
+            notional = round(und_spot * units, 2)
+            market_val = round(curr_p * units, 2)
             if pos.side == "long":
                 unrealized_pnl = round((curr_p - pos.entry_price) * units, 2)
             else:

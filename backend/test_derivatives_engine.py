@@ -958,6 +958,139 @@ def test_get_derivative_positions_summary():
         db.close()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST 10: Naked Option Margin Calculation Strictly Uses SPOT, Not Strike
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_naked_option_margin_uses_spot_price_not_strike():
+    """
+    Confirms explicitly that naked option margin_locked (sell_to_open) uses the
+    CURRENT UNDERLYING SPOT PRICE, NEVER the strike price:
+    - Deep OTM Call (strike ₹26,000 >> spot ₹23,000):
+      Margin = 20% of (23,000 * 65) = ₹2,99,000 (NOT 20% of 26,000 * 65 = ₹3,38,000)
+    - Deep OTM Put (strike ₹19,000 << spot ₹23,000):
+      Margin = 20% of (23,000 * 65) = ₹2,99,000 (NOT 20% of 19,000 * 65 = ₹2,47,000)
+    - Auto-resolution via resolve_underlying_spot_price when underlying_price is omitted.
+    """
+    db, in_wallet, _ = setup_test_db()
+    try:
+        spot_price = 23000.0
+
+        # 1. Deep OTM Call: Strike 26,000 (+3,000 above spot)
+        contract_otm_call = get_or_create_contract(
+            db=db,
+            market="IN",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="call",
+            strike_price=26000.0,
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+        )
+
+        order_call = place_derivative_order(
+            db=db,
+            wallet=in_wallet,
+            contract=contract_otm_call,
+            side="sell",
+            action="sell_to_open",
+            quantity=1.0,
+            fill_price=15.0,
+            underlying_price=spot_price,
+        )
+        assert order_call.status == "filled"
+        # 20% of (23,000 * 65) = ₹2,99,000.00
+        # If strike (26,000) had been used, it would be ₹3,38,000.00
+        assert order_call.margin_required == 299000.0
+        assert order_call.margin_required != 338000.0
+
+        db.refresh(in_wallet)
+        assert in_wallet.margin_used == 299000.0
+
+        pos_call = db.query(DerivativePosition).filter(DerivativePosition.contract_id == contract_otm_call.id).first()
+        assert pos_call.margin_locked == 299000.0
+
+        # 2. Deep OTM Put: Strike 19,000 (-4,000 below spot)
+        contract_otm_put = get_or_create_contract(
+            db=db,
+            market="IN",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="put",
+            strike_price=19000.0,
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+        )
+
+        order_put = place_derivative_order(
+            db=db,
+            wallet=in_wallet,
+            contract=contract_otm_put,
+            side="sell",
+            action="sell_to_open",
+            quantity=1.0,
+            fill_price=10.0,
+            underlying_price=spot_price,
+        )
+        assert order_put.status == "filled"
+        # 20% of (23,000 * 65) = ₹2,99,000.00
+        # If strike (19,000) had been used, it would be ₹2,47,000.00
+        assert order_put.margin_required == 299000.0
+        assert order_put.margin_required != 247000.0
+
+        db.refresh(in_wallet)
+        # Total pooled margin = 299,000 + 299,000 = 598,000.00
+        assert in_wallet.margin_used == 598000.0
+
+        pos_put = db.query(DerivativePosition).filter(DerivativePosition.contract_id == contract_otm_put.id).first()
+        assert pos_put.margin_locked == 299000.0
+
+        # 3. Test auto-resolution via resolve_underlying_spot_price when underlying_price is omitted
+        contract_otm_call2 = get_or_create_contract(
+            db=db,
+            market="IN",
+            underlying="NIFTY",
+            instrument_type="option",
+            option_type="call",
+            strike_price=27000.0,  # +4,000 above spot
+            expiry_date=date(2026, 9, 29),
+            lot_size=65,
+        )
+        mock_spot_quote = PriceQuote(
+            symbol="^NSEI",
+            display_name="NIFTY 50",
+            exchange="NSE",
+            currency="INR",
+            price=23000.0,
+            prev_close=22950.0,
+            change=50.0,
+            change_pct=0.22,
+            day_high=23050.0,
+            day_low=22900.0,
+            volume=1000000,
+            market_open=True,
+            timestamp="2026-09-26T10:00:00Z",
+        )
+        with patch("services.derivatives_engine.get_quote", return_value=mock_spot_quote):
+            order_auto = place_derivative_order(
+                db=db,
+                wallet=in_wallet,
+                contract=contract_otm_call2,
+                side="sell",
+                action="sell_to_open",
+                quantity=1.0,
+                fill_price=8.0,
+                # underlying_price omitted! Engine must auto-resolve spot price
+            )
+            assert order_auto.status == "filled"
+            assert order_auto.margin_required == 299000.0  # based on 23,000 spot, NOT 27,000 strike!
+            assert order_auto.margin_required != round(0.20 * 27000.0 * 65, 2)  # NOT 351,000
+
+        print("[PASS] test_naked_option_margin_uses_spot_price_not_strike")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     print("Running test_derivatives_engine.py unit test suite...")
     test_option_buying_upfront_premium_and_no_margin()
@@ -969,4 +1102,5 @@ if __name__ == "__main__":
     test_derivatives_expiry_cash_settlement()
     test_derivative_margin_call_liquidation()
     test_get_derivative_positions_summary()
-    print("\nALL 9 DERIVATIVES ENGINE TESTS PASSED!")
+    test_naked_option_margin_uses_spot_price_not_strike()
+    print("\nALL 10 DERIVATIVES ENGINE TESTS PASSED!")
