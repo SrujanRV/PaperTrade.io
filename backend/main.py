@@ -17,6 +17,7 @@ from database import Base, engine
 from routers.prices import router as prices_router
 from routers.wallet import router as wallet_router
 from routers.orders import router as orders_router
+from routers.derivatives import router as derivatives_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -138,6 +139,14 @@ if "holding_lots" in _inspector.get_table_names() and "holdings" in _inspector.g
         """))
         _conn.commit()
 
+if "derivative_orders" in _inspector.get_table_names():
+    _d_order_cols = {c["name"] for c in _inspector.get_columns("derivative_orders")}
+    if "triggered_by" not in _d_order_cols:
+        with engine.connect() as _conn:
+            _conn.execute(text("ALTER TABLE derivative_orders ADD COLUMN triggered_by VARCHAR(30) DEFAULT NULL"))
+            _conn.commit()
+        logger.info("Migration applied: added 'triggered_by' column to derivative_orders")
+
 _derivative_tables = {"derivative_contracts", "derivative_positions", "derivative_orders", "derivative_transactions"}
 _current_tables = set(sa_inspect(engine).get_table_names())
 if _derivative_tables.issubset(_current_tables):
@@ -184,6 +193,7 @@ app.include_router(prices_router)
 app.include_router(wallet_router)
 app.include_router(orders_router)
 app.include_router(single_order_router)
+app.include_router(derivatives_router)
 
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles

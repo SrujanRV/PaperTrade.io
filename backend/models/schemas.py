@@ -291,6 +291,7 @@ class DerivativeOrderOut(BaseModel):
     status: Literal["pending", "filled", "rejected", "cancelled"]
     reject_reason: str | None = None
     margin_required: float = 0.0
+    triggered_by: str | None = None
     created_at: datetime
     executed_at: datetime | None = None
 
@@ -311,6 +312,50 @@ class DerivativeTransactionOut(BaseModel):
     timestamp: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DerivativeOrderRequest(BaseModel):
+    """Body for placing an Options or Futures order"""
+    market: Literal["IN", "US"]
+    contract_id: int | None = None
+    # Alternatively specify contract specification:
+    symbol: str | None = None
+    underlying: str | None = None
+    instrument_type: Literal["option", "future"] | None = None
+    option_type: Literal["call", "put"] | None = None
+    strike_price: float | None = None
+    expiry_date: date | None = None
+    lot_size: int | None = None
+
+    side: Literal["buy", "sell"]
+    action: Literal["buy_to_open", "sell_to_open", "buy_to_close", "sell_to_close"]
+    quantity: float = Field(..., gt=0, description="Order quantity in lots (e.g. 1, 2)")
+    order_type: Literal["market", "limit"] = "market"
+    price: float | None = Field(None, gt=0, description="Limit price (or fill price override for testing)")
+
+
+class DerivativePositionWithPnLOut(BaseModel):
+    """Open Options or Futures position with live market metrics"""
+    id: int
+    wallet_id: int
+    contract_id: int
+    contract: DerivativeContractOut
+    side: Literal["long", "short"]
+    quantity: float  # in lots
+    entry_price: float
+    current_price: float
+    notional_value: float
+    market_value: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    is_covered: bool = False
+    margin_locked: float = 0.0
+    maintenance_margin_required: float = 0.0
+    margin_level_pct: float | None = None
+    last_mtm_price: float | None = None
+    last_mtm_date: date | None = None
+    created_at: datetime
+
 
 
 

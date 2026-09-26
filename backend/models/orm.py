@@ -360,6 +360,7 @@ class DerivativeOrder(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # "pending" | "filled" | "rejected" | "cancelled"
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     margin_required: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    triggered_by: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
