@@ -265,7 +265,7 @@ def open_browser(url, browser_path=None):
     """Open specified browser directly without triggering cmd.exe or console windows."""
     if browser_path and os.path.isfile(browser_path):
         try:
-            subprocess.Popen([browser_path, url], creationflags=0x08000000 | 0x00000008)
+            subprocess.Popen([browser_path, url])
             return
         except Exception:
             pass
@@ -304,16 +304,16 @@ def launch(open_browser_window=True, exit_on_complete=False, force_browser_selec
     log_path = os.path.join(BACKEND_DIR, "server.log")
 
     try:
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            subprocess.Popen(
-                cmd,
-                cwd=BACKEND_DIR,
-                creationflags=creationflags,
-                close_fds=True,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=log_file,
-            )
+        log_file = open(log_path, "a", encoding="utf-8")
+        subprocess.Popen(
+            cmd,
+            cwd=BACKEND_DIR,
+            creationflags=creationflags,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
+        )
     except Exception as e:
         err_log = os.path.join(PROJECT_ROOT, "launcher_error.log")
         with open(err_log, "w", encoding="utf-8") as f:
@@ -323,10 +323,10 @@ def launch(open_browser_window=True, exit_on_complete=False, force_browser_selec
         return False
 
     # 3. Wait for the server to become responsive
-    max_wait = 10.0
+    max_wait = 25.0
     start_time = time.time()
     while time.time() - start_time < max_wait:
-        if is_server_running(timeout=0.4):
+        if is_server_running(timeout=0.5):
             break
         time.sleep(0.2)
 
@@ -341,3 +341,4 @@ def launch(open_browser_window=True, exit_on_complete=False, force_browser_selec
 
 if __name__ == "__main__":
     launch(open_browser_window=True, exit_on_complete=True)
+

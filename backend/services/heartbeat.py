@@ -20,9 +20,9 @@ class HeartbeatManager:
 
     def __init__(
         self,
-        startup_grace_seconds: float = 30.0,
-        heartbeat_timeout_seconds: float = 15.0,
-        grace_period_seconds: float = 15.0,
+        startup_grace_seconds: float = 120.0,
+        heartbeat_timeout_seconds: float = 20.0,
+        grace_period_seconds: float = 30.0,
         check_interval_seconds: float = 1.0,
     ):
         self.startup_grace_seconds = startup_grace_seconds
