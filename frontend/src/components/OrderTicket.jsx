@@ -294,9 +294,21 @@ export function OrderTicket({
           </div>
 
           <div className="flex items-center justify-between mt-2 font-mono-tabular text-xs">
-            <span className="text-text-muted">
-              {effectiveContract.expiry_date ? `Exp: ${effectiveContract.expiry_date}` : 'Continuous / Perpetual'}
-            </span>
+            <div className="flex items-center space-x-2">
+              <span className="text-text-muted">
+                {effectiveContract.expiry_date ? `Exp: ${effectiveContract.expiry_date}` : 'Continuous / Perpetual'}
+              </span>
+              {und && onOpenChart && (
+                <button
+                  type="button"
+                  onClick={() => onOpenChart(und.includes('.') ? und : (mkt === 'IN' ? `${und}.NS` : und))}
+                  className="text-[10px] text-accent hover:underline uppercase tracking-wider font-semibold"
+                  title={`Open chart for ${und}`}
+                >
+                  [CHART]
+                </button>
+              )}
+            </div>
             <span className="text-text-primary font-bold text-sm">
               {currSym}{formatMoney(liveP, curr)}
             </span>
@@ -843,6 +855,14 @@ export function OrderTicket({
           </span>
         </div>
       </div>
+
+      {/* Live Session Price Chart (Lightweight Charts Area/Line Normal Graph) */}
+      <LivePriceChart
+        ticker={upper}
+        quote={quote}
+        currencySymbol={currencySymbol}
+        onExpandChart={onOpenChart}
+      />
 
       {/* Uninitialized Wallet Warning */}
       {!wallet ? (

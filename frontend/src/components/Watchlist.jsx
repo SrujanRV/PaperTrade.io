@@ -504,7 +504,7 @@ export function Watchlist({
                         <div className="flex items-center justify-center space-x-1">
                           <button
                             type="button"
-                            title={`Open candlestick chart for ${meta.symbol}`}
+                            title={`Open price chart for ${meta.symbol}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               if (onOpenChart) onOpenChart(meta.symbol);

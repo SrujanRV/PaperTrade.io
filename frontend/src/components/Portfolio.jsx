@@ -525,7 +525,7 @@ export function Portfolio({
                             <button
                               type="button"
                               onClick={() => onOpenChart && onOpenChart(h.ticker)}
-                              title={`Open candlestick chart for ${h.ticker}`}
+                              title={`Open price chart for ${h.ticker}`}
                               className="p-1 text-text-muted hover:text-accent hover:bg-base border border-transparent hover:border-border transition-colors flex items-center justify-center"
                             >
                               <BarChart2 size={13} />
