@@ -70,6 +70,10 @@ export function Portfolio({
   useEffect(() => {
     setLoading(true);
     loadPortfolioData();
+    const interval = setInterval(() => {
+      loadPortfolioData();
+    }, 4000);
+    return () => clearInterval(interval);
   }, [loadPortfolioData, refreshKey]);
 
   const holdings = summary?.holdings || [];
@@ -663,17 +667,29 @@ export function Portfolio({
 
                         {/* Current LTP */}
                         <td className="px-3 py-2 text-right font-bold text-text-primary">
-                          {currencySymbol}{formatMoney(pos.current_price, currency)}
+                          {pos.price_available === false ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono-tabular font-bold tracking-wider uppercase border bg-amber-500/15 text-amber-400 border-amber-500/40">
+                              PRICE UNAVAILABLE
+                            </span>
+                          ) : (
+                            `${currencySymbol}${formatMoney(pos.current_price, currency)}`
+                          )}
                         </td>
 
                         {/* Unrealized P&L */}
                         <td className="px-3 py-2 text-right">
-                          <span className={`font-semibold ${pnlColor}`}>
-                            {currencySymbol}{formatSignedMoney(pos.unrealized_pnl, currency)}{' '}
-                            <span className="text-[11px] font-normal">
-                              ({formatSignedPct(pos.unrealized_pnl_pct)})
+                          {pos.price_available === false ? (
+                            <span className="text-[11px] text-text-muted font-mono-tabular font-medium">
+                              STALE (—)
                             </span>
-                          </span>
+                          ) : (
+                            <span className={`font-semibold ${pnlColor}`}>
+                              {currencySymbol}{formatSignedMoney(pos.unrealized_pnl, currency)}{' '}
+                              <span className="text-[11px] font-normal">
+                                ({formatSignedPct(pos.unrealized_pnl_pct)})
+                              </span>
+                            </span>
+                          )}
                         </td>
 
                         {/* Margin Locked */}

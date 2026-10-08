@@ -199,6 +199,7 @@ def get_derivative_positions(
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
                 current_price=item["current_price"],
+                price_available=item.get("price_available", True),
                 notional_value=item["notional_value"],
                 market_value=item["market_value"],
                 unrealized_pnl=item["unrealized_pnl"],

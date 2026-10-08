@@ -362,7 +362,8 @@ class DerivativePositionWithPnLOut(BaseModel):
     side: Literal["long", "short"]
     quantity: float  # in lots
     entry_price: float
-    current_price: float
+    current_price: float | None = None
+    price_available: bool = True
     notional_value: float
     market_value: float
     unrealized_pnl: float

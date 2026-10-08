@@ -75,7 +75,11 @@ def _today_date() -> date:
     return datetime.now(timezone.utc).date()
 
 
-from services.derivatives_feed import NSE_LOT_SIZES
+from services.derivatives_feed import (
+    NSE_LOT_SIZES,
+    resolve_derivative_contract_quote,
+    DerivativeQuoteResult,
+)
 
 # Comprehensive Default lot sizes across indices and F&O equities
 DEFAULT_LOT_SIZES = NSE_LOT_SIZES
@@ -329,19 +333,30 @@ def place_derivative_order(
         if (fill_price is None or fill_price <= 0) and bid is not None and ask is not None and bid > 0 and ask > 0:
             fill_price = round((bid + ask) / 2.0, 2)
 
-        # Look up live price quote for the contract symbol or underlying
+        # Look up live price quote via shared resolution function
         if fill_price is None or fill_price <= 0:
-            quote = get_quote(contract.symbol)
-            if quote and quote.price > 0:
-                fill_price = quote.price
+            quote_res = resolve_derivative_contract_quote(contract)
+            if quote_res.price_available and quote_res.price and quote_res.price > 0:
+                if side == "buy" and quote_res.ask and quote_res.ask > 0:
+                    fill_price = quote_res.ask
+                elif side == "sell" and quote_res.bid and quote_res.bid > 0:
+                    fill_price = quote_res.bid
+                else:
+                    fill_price = quote_res.price
+                if (underlying_price is None or underlying_price <= 0) and quote_res.underlying_price:
+                    underlying_price = quote_res.underlying_price
             elif requested_price and requested_price > 0:
                 fill_price = requested_price
             else:
-                # Under no circumstances does an order execute at 0 or unresolvable price
-                return _persist_rejected_order(
-                    db, wallet.id, contract.id, side, action, quantity,
-                    "unresolvable_price", order_type, requested_price
-                )
+                quote = get_quote(contract.symbol)
+                if quote and quote.price > 0:
+                    fill_price = quote.price
+                else:
+                    # Under no circumstances does an order execute at 0 or unresolvable price
+                    return _persist_rejected_order(
+                        db, wallet.id, contract.id, side, action, quantity,
+                        "unresolvable_price", order_type, requested_price
+                    )
 
     # Resolve underlying spot price (strictly used for naked option notional calculation)
     if underlying_price is None or underlying_price <= 0:
@@ -878,14 +893,27 @@ def evaluate_daily_futures_mtm(
         if pos.last_mtm_date is not None and pos.last_mtm_date >= curr_date:
             continue
 
-        mark_p = prices.get(contract.symbol)
+        mark_p = prices.get(contract.symbol) if prices else None
+        if (mark_p is None or mark_p <= 0) and prices:
+            mark_p = prices.get(contract.symbol.upper())
+
+        if mark_p is None or mark_p <= 0:
+            quote_res = resolve_derivative_contract_quote(contract)
+            if quote_res.price_available and quote_res.price and quote_res.price > 0:
+                mark_p = quote_res.price
+
         if mark_p is None or mark_p <= 0:
             q = get_quote(contract.symbol)
             if q and q.price > 0:
                 mark_p = q.price
-            else:
-                # If no mark price available, skip MTM for this position
-                continue
+
+        if mark_p is None or mark_p <= 0:
+            # LIVE MARK PRICE UNAVAILABLE: Skip MTM settlement for this position and log warning
+            logger.warning(
+                "MTM SETTLEMENT SKIPPED for %s (pos #%d): live mark price unavailable. Skipping settlement.",
+                contract.symbol, pos.id
+            )
+            continue
 
         ref_p = pos.last_mtm_price if pos.last_mtm_price is not None else pos.entry_price
         units = pos.quantity * contract.lot_size
@@ -1074,20 +1102,42 @@ def evaluate_derivative_margin_calls(
         wallet = pos.wallet
         units = pos.quantity * contract.lot_size
 
-        # Resolve live mark price and underlying price
+        # Resolve live mark price and underlying price via quotes or shared resolution function
         mark_p = None
-        if contract.symbol in quotes:
+        if quotes and contract.symbol in quotes:
             val = quotes[contract.symbol]
+            mark_p = val.price if isinstance(val, PriceQuote) else float(val)
+        elif quotes and contract.symbol.upper() in quotes:
+            val = quotes[contract.symbol.upper()]
             mark_p = val.price if isinstance(val, PriceQuote) else float(val)
 
         und_p = None
-        if contract.underlying in quotes:
+        if quotes and contract.underlying in quotes:
             val = quotes[contract.underlying]
             und_p = val.price if isinstance(val, PriceQuote) else float(val)
+        elif quotes and contract.underlying.upper() in quotes:
+            val = quotes[contract.underlying.upper()]
+            und_p = val.price if isinstance(val, PriceQuote) else float(val)
 
-        if mark_p is None:
+        if mark_p is None or mark_p <= 0:
+            quote_res = resolve_derivative_contract_quote(contract)
+            if quote_res.price_available and quote_res.price and quote_res.price > 0:
+                mark_p = quote_res.price
+                if (und_p is None or und_p <= 0) and quote_res.underlying_price:
+                    und_p = quote_res.underlying_price
+
+        if mark_p is None or mark_p <= 0:
             q = get_quote(contract.symbol)
-            mark_p = q.price if q and q.price > 0 else pos.entry_price
+            if q and q.price > 0:
+                mark_p = q.price
+
+        if mark_p is None or mark_p <= 0:
+            # LIVE MARK PRICE UNAVAILABLE: Never assume price is unchanged. Skip liquidation check and log warning.
+            logger.warning(
+                "MARGIN CALL EVALUATION SKIPPED for %s (pos #%d): live mark price unavailable. Skipping liquidation check.",
+                contract.symbol, pos.id
+            )
+            continue
 
         if und_p is None:
             und_p = resolve_underlying_spot_price(contract.underlying, contract.market)
@@ -1176,47 +1226,75 @@ def get_derivative_positions_summary(
         c = pos.contract
         units = pos.quantity * c.lot_size
 
-        q = quotes.get(c.symbol)
-        curr_p = q.price if q and q.price > 0 else pos.entry_price
+        # Resolve live mark price via quotes map or shared resolution function
+        quote_res = None
+        if quotes and c.symbol in quotes:
+            val = quotes[c.symbol]
+            p = val.price if isinstance(val, PriceQuote) else float(val)
+            if p > 0:
+                quote_res = DerivativeQuoteResult(price=p, price_available=True, source="override_quotes")
+        elif quotes and c.symbol.upper() in quotes:
+            val = quotes[c.symbol.upper()]
+            p = val.price if isinstance(val, PriceQuote) else float(val)
+            if p > 0:
+                quote_res = DerivativeQuoteResult(price=p, price_available=True, source="override_quotes")
 
-        # Current market value
-        if c.instrument_type == "option":
-            und_spot = None
-            if c.underlying in quotes:
-                val = quotes[c.underlying]
-                und_spot = val.price if isinstance(val, PriceQuote) else float(val)
-            if und_spot is None or und_spot <= 0:
-                und_spot = resolve_underlying_spot_price(c.underlying, c.market)
-            if und_spot is None or und_spot <= 0:
-                und_spot = curr_p
-            notional = round(und_spot * units, 2)
-            market_val = round(curr_p * units, 2)
-            if pos.side == "long":
-                unrealized_pnl = round((curr_p - pos.entry_price) * units, 2)
-            else:
-                unrealized_pnl = round((pos.entry_price - curr_p) * units, 2)
+        if quote_res is None or not quote_res.price_available:
+            quote_res = resolve_derivative_contract_quote(c)
 
-            maint_req = round(0.15 * notional, 2) if (pos.side == "short" and not pos.is_covered) else 0.0
-        else:
-            notional = curr_p * units
+        if not quote_res.price_available or quote_res.price is None or quote_res.price <= 0:
+            # LIVE PRICE UNAVAILABLE: Never fall back silently to entry_price!
+            curr_p = None
+            price_avail = False
+            notional = round(pos.entry_price * units, 2)
             market_val = notional
-            ref_p = pos.last_mtm_price if pos.last_mtm_price is not None else pos.entry_price
-            if pos.side == "long":
-                unrealized_pnl = round((curr_p - ref_p) * units, 2)
+            unrealized_pnl = 0.0
+            unrealized_pct = 0.0
+            maint_req = round(0.10 * notional, 2) if c.instrument_type == "future" else (round(0.15 * notional, 2) if (pos.side == "short" and not pos.is_covered) else 0.0)
+            margin_level = None
+        else:
+            curr_p = quote_res.price
+            price_avail = True
+
+            # Current market value
+            if c.instrument_type == "option":
+                und_spot = quote_res.underlying_price
+                if (und_spot is None or und_spot <= 0) and quotes and c.underlying in quotes:
+                    val = quotes[c.underlying]
+                    und_spot = val.price if isinstance(val, PriceQuote) else float(val)
+                if und_spot is None or und_spot <= 0:
+                    und_spot = resolve_underlying_spot_price(c.underlying, c.market)
+                if und_spot is None or und_spot <= 0:
+                    und_spot = curr_p
+                notional = round(und_spot * units, 2)
+                market_val = round(curr_p * units, 2)
+                if pos.side == "long":
+                    unrealized_pnl = round((curr_p - pos.entry_price) * units, 2)
+                else:
+                    unrealized_pnl = round((pos.entry_price - curr_p) * units, 2)
+
+                maint_req = round(0.15 * notional, 2) if (pos.side == "short" and not pos.is_covered) else 0.0
             else:
-                unrealized_pnl = round((ref_p - curr_p) * units, 2)
+                notional = round(curr_p * units, 2)
+                market_val = notional
+                ref_p = pos.last_mtm_price if pos.last_mtm_price is not None else pos.entry_price
+                if pos.side == "long":
+                    unrealized_pnl = round((curr_p - ref_p) * units, 2)
+                else:
+                    unrealized_pnl = round((ref_p - curr_p) * units, 2)
 
-            maint_req = round(0.10 * notional, 2)
+                maint_req = round(0.10 * notional, 2)
 
-        entry_val = pos.entry_price * units
-        unrealized_pct = round((unrealized_pnl / entry_val) * 100, 2) if entry_val > 0 else 0.0
-        eff_margin = min(pos.margin_locked, pos.margin_locked + unrealized_pnl)
-        margin_level = round((eff_margin / maint_req) * 100, 1) if maint_req > 0 else None
+            entry_val = pos.entry_price * units
+            unrealized_pct = round((unrealized_pnl / entry_val) * 100, 2) if entry_val > 0 else 0.0
+            eff_margin = min(pos.margin_locked, pos.margin_locked + unrealized_pnl)
+            margin_level = round((eff_margin / maint_req) * 100, 1) if maint_req > 0 else None
 
         results.append({
             "position": pos,
             "contract": c,
             "current_price": curr_p,
+            "price_available": price_avail,
             "notional_value": notional,
             "market_value": market_val,
             "unrealized_pnl": unrealized_pnl,

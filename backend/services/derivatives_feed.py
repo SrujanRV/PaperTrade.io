@@ -850,3 +850,228 @@ def fetch_us_continuous_futures() -> List[Dict[str, Any]]:
         })
 
     return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Unified Derivative Contract Price Resolution
+# ══════════════════════════════════════════════════════════════════════════════
+
+from dataclasses import dataclass
+
+@dataclass
+class DerivativeQuoteResult:
+    price: float | None
+    bid: float | None = None
+    ask: float | None = None
+    underlying_price: float | None = None
+    price_available: bool = False
+    source: str = ""
+
+
+def _normalize_code(s: str) -> str:
+    return s.upper().replace("-", "").replace(" ", "").replace("_", "")
+
+
+def _parse_contract_date(d: Any) -> date | None:
+    if isinstance(d, date):
+        return d
+    if not d or not isinstance(d, str):
+        return None
+    s = d.strip()
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d%b%y", "%d%b%Y", "%d-%B-%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_derivative_contract_quote(contract: Any) -> DerivativeQuoteResult:
+    """
+    Unified price resolution function for Options and Futures contracts.
+    Uses the EXACT SAME live quote source as the Futures Market and Option Chain views:
+    - Indian Index & Stock Futures: nse_client.get_futures(contract.underlying)
+    - US Continuous Futures: fetch_us_continuous_futures() / get_quote(contract.symbol)
+    - Indian Options: nse_client.get_option_chain(contract.underlying, expiry)
+    - US Options: fetch_us_option_chain(contract.underlying, expiry)
+
+    NEVER falls back silently to entry_price. Returns price_available=False if live quote is missing.
+    """
+    inst = getattr(contract, "instrument_type", "").lower()
+    market = getattr(contract, "market", "IN").upper()
+    underlying = getattr(contract, "underlying", "").upper().replace(".NS", "").replace(".BO", "")
+    expiry_date = getattr(contract, "expiry_date", None)
+    if isinstance(expiry_date, str):
+        expiry_date = _parse_contract_date(expiry_date)
+    symbol = getattr(contract, "symbol", "") or ""
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # CASE 1: FUTURES
+    # ──────────────────────────────────────────────────────────────────────────
+    if inst == "future":
+        if market == "US":
+            # US Continuous Futures (ES=F, NQ=F, CL=F, GC=F)
+            fut_sym = symbol if symbol.endswith("=F") else f"{underlying}=F"
+            q = get_quote(fut_sym)
+            if q and not q.error and q.price and q.price > 0:
+                return DerivativeQuoteResult(
+                    price=float(q.price),
+                    bid=float(q.price),
+                    ask=float(q.price),
+                    underlying_price=float(q.price),
+                    price_available=True,
+                    source="us_continuous_futures",
+                )
+            return DerivativeQuoteResult(
+                price=None,
+                price_available=False,
+                source="us_continuous_futures_unavailable",
+            )
+
+        # Indian Futures (NIFTY, BANKNIFTY, RELIANCE, TCS, etc.)
+        try:
+            fut_data = nse_client.get_futures(underlying)
+            contracts = fut_data.get("contracts", [])
+            und_val = fut_data.get("underlying_value")
+
+            norm_sym = _normalize_code(symbol)
+
+            matched_c = None
+            for c in contracts:
+                # 1. Match by normalized contract symbol
+                c_contract = c.get("contract") or ""
+                if c_contract and _normalize_code(c_contract) == norm_sym:
+                    matched_c = c
+                    break
+
+                # 2. Match by expiry date
+                if expiry_date:
+                    c_exp_date = _parse_contract_date(c.get("expiry") or c.get("expiryDate"))
+                    if c_exp_date and c_exp_date == expiry_date:
+                        matched_c = c
+                        break
+
+            # If no exact match and only 1 contract
+            if not matched_c and len(contracts) == 1:
+                matched_c = contracts[0]
+
+            if matched_c:
+                ltp = matched_c.get("ltp") or matched_c.get("lastPrice")
+                if ltp is not None and float(ltp) > 0:
+                    c_und = matched_c.get("underlying_value") or und_val
+                    return DerivativeQuoteResult(
+                        price=float(ltp),
+                        bid=matched_c.get("bid"),
+                        ask=matched_c.get("ask"),
+                        underlying_price=float(c_und) if c_und else None,
+                        price_available=True,
+                        source="nse_futures",
+                    )
+        except Exception as e:
+            logger.warning("Error in resolve_derivative_contract_quote for Indian future %s: %s", symbol, e)
+
+        return DerivativeQuoteResult(
+            price=None,
+            price_available=False,
+            source="nse_futures_unavailable",
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # CASE 2: OPTIONS
+    # ──────────────────────────────────────────────────────────────────────────
+    if inst == "option":
+        strike_price = getattr(contract, "strike_price", None)
+        option_type = getattr(contract, "option_type", "call")
+        opt_type = (option_type or "call").lower()
+
+        if market == "IN":
+            try:
+                exp_str = expiry_date.strftime("%d-%b-%Y") if expiry_date else None
+                chain_data = nse_client.get_option_chain(symbol=underlying, expiry=exp_str)
+                strikes = chain_data.get("strikes", [])
+                und_val = chain_data.get("underlying_value")
+
+                matched_strike = None
+                if strike_price is not None:
+                    matched_strike = next((s for s in strikes if abs(s.get("strike", 0.0) - float(strike_price)) < 0.01), None)
+
+                if matched_strike:
+                    opt_side = matched_strike.get("call" if opt_type == "call" else "put", {})
+                    ltp = opt_side.get("ltp") or opt_side.get("lastPrice")
+                    bid = opt_side.get("bid")
+                    ask = opt_side.get("ask")
+
+                    eff_price = None
+                    if ltp is not None and float(ltp) > 0:
+                        eff_price = float(ltp)
+                    elif bid is not None and float(bid) > 0:
+                        eff_price = float(bid)
+                    elif ask is not None and float(ask) > 0:
+                        eff_price = float(ask)
+
+                    if eff_price is not None and eff_price > 0:
+                        return DerivativeQuoteResult(
+                            price=eff_price,
+                            bid=bid,
+                            ask=ask,
+                            underlying_price=und_val,
+                            price_available=True,
+                            source="nse_option_chain",
+                        )
+            except Exception as e:
+                logger.warning("Error in resolve_derivative_contract_quote for Indian option %s: %s", symbol, e)
+
+            return DerivativeQuoteResult(
+                price=None,
+                price_available=False,
+                source="nse_option_unavailable",
+            )
+
+        if market == "US":
+            try:
+                exp_str = expiry_date.isoformat() if expiry_date else None
+                chain_data = fetch_us_option_chain(ticker_symbol=underlying, expiry=exp_str)
+                strikes = chain_data.get("strikes", [])
+                und_val = chain_data.get("underlying_value")
+
+                matched_strike = None
+                if strike_price is not None:
+                    matched_strike = next((s for s in strikes if abs(s.get("strike", 0.0) - float(strike_price)) < 0.01), None)
+
+                if matched_strike:
+                    opt_side = matched_strike.get("call" if opt_type == "call" else "put", {})
+                    ltp = opt_side.get("ltp")
+                    bid = opt_side.get("bid")
+                    ask = opt_side.get("ask")
+
+                    eff_price = None
+                    if ltp is not None and float(ltp) > 0:
+                        eff_price = float(ltp)
+                    elif bid is not None and float(bid) > 0:
+                        eff_price = float(bid)
+                    elif ask is not None and float(ask) > 0:
+                        eff_price = float(ask)
+
+                    if eff_price is not None and eff_price > 0:
+                        return DerivativeQuoteResult(
+                            price=eff_price,
+                            bid=bid,
+                            ask=ask,
+                            underlying_price=und_val,
+                            price_available=True,
+                            source="us_option_chain",
+                        )
+            except Exception as e:
+                logger.warning("Error in resolve_derivative_contract_quote for US option %s: %s", symbol, e)
+
+            return DerivativeQuoteResult(
+                price=None,
+                price_available=False,
+                source="us_option_unavailable",
+            )
+
+    return DerivativeQuoteResult(
+        price=None,
+        price_available=False,
+        source="unsupported_instrument",
+    )

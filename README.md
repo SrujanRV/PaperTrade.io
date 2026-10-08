@@ -70,6 +70,7 @@ backend/
   test_derivatives_engine.py    # Phase 6c/6d/6e unit test suite (11 comprehensive scenarios)
   test_zero_ltp_fill.py         # Bid/Ask fill execution verification suite for zero-LTP strikes
   test_buying_power_consistency.py # Cross-asset buying power & margin locking verification suite
+  test_derivatives_live_price_sync.py # Live price & P&L synchronization verification suite across F&O
 
 frontend/
   src/
@@ -134,6 +135,7 @@ python test_short_selling.py
 python test_derivatives_engine.py
 python test_zero_ltp_fill.py
 python test_buying_power_consistency.py
+python test_derivatives_live_price_sync.py
 
 # Start backend on http://localhost:8000
 python run_server.py
