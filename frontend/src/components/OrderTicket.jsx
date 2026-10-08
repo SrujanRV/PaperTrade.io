@@ -702,9 +702,8 @@ export function OrderTicket({
     ? Number((effectivePrice * shortQty).toFixed(2))
     : 0;
 
-  const availableBuyingPower = market === 'US'
-    ? (wallet?.available_buying_power ?? Math.max(0, (wallet?.current_cash_balance ?? 0) - (wallet?.margin_used ?? 0)))
-    : cashBalance;
+  const availableBuyingPower = wallet?.available_buying_power ??
+    Math.max(0, (wallet?.current_cash_balance ?? 0) - (wallet?.margin_used ?? 0));
 
   const fetchResolvedDate = useCallback((mkt, days) => {
     const cacheKey = `${mkt}:${days}`;
@@ -748,7 +747,9 @@ export function OrderTicket({
     };
   }, [side, isCoverBuyOperation, isShortSellOperation, durationMode, customDays, market, fetchResolvedDate]);
 
-  const hasInsufficientFunds = side === 'buy' && totalCost > cashBalance;
+  const hasInsufficientFunds = side === 'buy' && (
+    isCoverBuyOperation ? totalCost > cashBalance : totalCost > availableBuyingPower
+  );
   const hasInsufficientMargin = isShortSellOperation && requiredShortMargin > availableBuyingPower;
   const hasInsufficientHoldings =
     orderType === 'stop_loss' && (Number(quantity) || 0) > ownedQuantity;
@@ -765,7 +766,10 @@ export function OrderTicket({
       return;
     }
     if (hasInsufficientFunds) {
-      setErrorMsg(`Insufficient funds. Estimated total is ${currencySymbol}${totalCost.toLocaleString()} but available cash is ${currencySymbol}${cashBalance.toLocaleString()}.`);
+      setErrorMsg(isCoverBuyOperation
+        ? `Insufficient funds. Covering this short position requires ${currencySymbol}${formatMoney(totalCost, currency)}, but available cash is ${currencySymbol}${formatMoney(cashBalance, currency)}.`
+        : `Insufficient buying power. Estimated total is ${currencySymbol}${formatMoney(totalCost, currency)}, but available buying power is ${currencySymbol}${formatMoney(availableBuyingPower, currency)}.`
+      );
       return;
     }
     if (hasInsufficientMargin) {
@@ -1020,11 +1024,17 @@ export function OrderTicket({
               <span className="text-text-primary font-bold">{currencySymbol}{formatMoney(totalCost, currency)}</span>
             </div>
             <div className="flex justify-between text-text-muted">
-              <span>AVAILABLE FUNDS:</span>
+              <span>{isCoverBuyOperation ? 'CASH AVAILABLE:' : 'AVAILABLE BUYING POWER:'}</span>
               <span className={hasInsufficientFunds || hasInsufficientMargin ? 'text-red font-bold' : 'text-text-primary font-bold'}>
-                {currencySymbol}{formatMoney(isUSShort ? availableBuyingPower : cashBalance, currency)}
+                {currencySymbol}{formatMoney(isCoverBuyOperation ? cashBalance : availableBuyingPower, currency)}
               </span>
             </div>
+            {!isCoverBuyOperation && (wallet?.margin_used || 0) > 0 && (
+              <div className="flex justify-between text-[10px] text-text-muted pt-1 border-t border-border/40">
+                <span>TOTAL CASH (COLLATERAL LOCKED):</span>
+                <span>{currencySymbol}{formatMoney(cashBalance, currency)} ({currencySymbol}{formatMoney(wallet?.margin_used || 0, currency)} locked)</span>
+              </div>
+            )}
           </div>
 
           {/* Submit Button */}
@@ -1046,7 +1056,7 @@ export function OrderTicket({
               : orderType === 'market' && !isMarketOpen
               ? 'MARKET CLOSED'
               : hasInsufficientFunds
-              ? 'INSUFFICIENT FUNDS'
+              ? (isCoverBuyOperation ? 'INSUFFICIENT FUNDS' : 'INSUFFICIENT BUYING POWER')
               : hasInsufficientMargin
               ? 'INSUFFICIENT MARGIN'
               : `${side.toUpperCase()} ${quantity} ${upper}`}

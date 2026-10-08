@@ -69,6 +69,7 @@ backend/
   test_short_selling.py         # Phase 5 margin trading & short selling tests
   test_derivatives_engine.py    # Phase 6c/6d/6e unit test suite (11 comprehensive scenarios)
   test_zero_ltp_fill.py         # Bid/Ask fill execution verification suite for zero-LTP strikes
+  test_buying_power_consistency.py # Cross-asset buying power & margin locking verification suite
 
 frontend/
   src/
@@ -132,6 +133,7 @@ python test_order_engine.py
 python test_short_selling.py
 python test_derivatives_engine.py
 python test_zero_ltp_fill.py
+python test_buying_power_consistency.py
 
 # Start backend on http://localhost:8000
 python run_server.py

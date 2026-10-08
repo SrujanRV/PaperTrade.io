@@ -122,8 +122,8 @@ def _execute_buy(
 ) -> Order:
     total_cost = round(price * quantity, 2)
 
-    # Cash check
-    if wallet.current_cash_balance < total_cost:
+    # Buying power check
+    if wallet.available_buying_power < total_cost:
         return _persist_rejected(
             db, wallet.id, ticker, "buy", quantity, "insufficient_funds",
             order_type=order_type, requested_price=requested_price,
@@ -423,9 +423,9 @@ def _execute_short_sell(
             )
         margin_to_lock = required_margin
     else:
-        # IN market: 1x cash check (unchanged)
+        # IN market: 1x cash check (checked against available buying power)
         required_margin = proceeds
-        if wallet.current_cash_balance < required_margin:
+        if wallet.available_buying_power < required_margin:
             return _persist_rejected(
                 db, wallet.id, ticker, "sell", quantity, "insufficient_margin",
                 order_type=order_type, requested_price=requested_price,
@@ -864,7 +864,7 @@ def place_order(
                                 order_type="market", is_short=True,
                             )
                     else:
-                        if wallet.current_cash_balance < round(quote.price * short_qty, 2):
+                        if wallet.available_buying_power < round(quote.price * short_qty, 2):
                             return _persist_rejected(
                                 db, wallet.id, ticker, "sell", short_qty, "insufficient_margin",
                                 order_type="market", is_short=True,
@@ -916,11 +916,18 @@ def place_order(
         # Pre-execution sanity checks
         if side == "buy":
             cost = round(limit_price * quantity, 2)
-            if wallet.current_cash_balance < cost:
-                return _persist_rejected(
-                    db, wallet.id, ticker, side, quantity, "insufficient_funds",
-                    order_type="limit", requested_price=limit_price,
-                )
+            if holding and holding.is_short:
+                if wallet.current_cash_balance < cost:
+                    return _persist_rejected(
+                        db, wallet.id, ticker, side, quantity, "insufficient_funds",
+                        order_type="limit", requested_price=limit_price,
+                    )
+            else:
+                if wallet.available_buying_power < cost:
+                    return _persist_rejected(
+                        db, wallet.id, ticker, side, quantity, "insufficient_funds",
+                        order_type="limit", requested_price=limit_price,
+                    )
             if holding and holding.is_short:
                 # Cover limit buy: if favorable now (current <= limit), fill immediately!
                 if quote.market_open and quote.price <= limit_price:
@@ -1026,7 +1033,7 @@ def place_order(
                             order_type="limit", requested_price=limit_price, is_short=True,
                         )
                 else:
-                    if wallet.current_cash_balance < round(limit_price * quantity, 2):
+                    if wallet.available_buying_power < round(limit_price * quantity, 2):
                         return _persist_rejected(
                             db, wallet.id, ticker, side, quantity, "insufficient_margin",
                             order_type="limit", requested_price=limit_price, is_short=True,
